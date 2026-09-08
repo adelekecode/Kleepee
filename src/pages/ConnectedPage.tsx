@@ -52,6 +52,10 @@ export function ConnectedPage() {
     navigate("/", { replace: true });
   }
 
+  function openNewSession() {
+    window.open("/", "_blank", "noopener,noreferrer");
+  }
+
   return (
     <main className="fade-in flex min-h-0 flex-1 flex-col gap-4 pb-2">
       <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -69,9 +73,14 @@ export function ConnectedPage() {
             Create new session
           </button>
         ) : (
-          <button className="btn-danger" type="button" onClick={disconnect}>
-            End session
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-secondary" type="button" onClick={openNewSession}>
+              New session
+            </button>
+            <button className="btn-danger" type="button" onClick={disconnect}>
+              End session
+            </button>
+          </div>
         )}
       </section>
 

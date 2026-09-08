@@ -8,7 +8,7 @@ interface StatusBarProps {
   // Extended props used by ConnectedPage for richer status detail
   dataChannelState?: RTCDataChannelState | null;
   retryAttempt?: number;
-  maxRetries?: number;
+  maxRetries?: number | null;
   terminalReason?: TerminalDisconnectReason;
 }
 
@@ -28,7 +28,7 @@ export function StatusBar({
   onNewSession,
   dataChannelState,
   retryAttempt = 0,
-  maxRetries = 3,
+  maxRetries = null,
   terminalReason = null,
 }: StatusBarProps) {
   // CONNECTED indicator only when DataChannel is open (Req 8.5).
@@ -40,7 +40,7 @@ export function StatusBar({
   const isEnded =
     state === "EXPIRED" ||
     (state === "DISCONNECTED" && terminalReason === "retries_exhausted") ||
-    (state === "DISCONNECTED" && retryAttempt >= maxRetries);
+    (state === "DISCONNECTED" && terminalReason === "manual");
 
   const isReconnecting =
     state === "DISCONNECTED" && !isEnded;
@@ -89,7 +89,11 @@ export function StatusBar({
       ) : isReconnecting ? (
         <>
           <SpinnerDots />
-          <span>Connection lost. Reconnecting{retryAttempt > 0 ? ` (${retryAttempt}/${maxRetries})` : ""}...</span>
+          <span>
+            Connection lost. Reconnecting
+            {retryAttempt > 0 ? maxRetries ? ` (${retryAttempt}/${maxRetries})` : ` (${retryAttempt})` : ""}
+            ...
+          </span>
         </>
       ) : (
         <>

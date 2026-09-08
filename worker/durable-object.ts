@@ -22,7 +22,6 @@ interface PeerRecord {
 
 const SESSION_STATE_KEY = "sessionState";
 const WAITING_TIMEOUT_MS = 10 * 60 * 1000;
-const EMPTY_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
 export class SessionDurableObject implements DurableObject {
   private peers: Map<string, PeerRecord> = new Map();
@@ -161,7 +160,13 @@ export class SessionDurableObject implements DurableObject {
     server.serializeAttachment(attachment);
     this.peers.set(attachment.peerId, { ws: server, attachment });
 
-    if (this.peers.size === 1) {
+    for (const [peerId, peer] of this.peers) {
+      if (peerId !== attachment.peerId) {
+        server.send(JSON.stringify({ type: "peer.join", deviceName: peer.attachment.deviceName }));
+      }
+    }
+
+    if (this.peers.size === 1 && this.sessionState === "WAITING") {
       await this.setSessionState("WAITING");
       await this.ctx.storage.setAlarm(Date.now() + WAITING_TIMEOUT_MS);
     }
@@ -191,7 +196,7 @@ export class SessionDurableObject implements DurableObject {
 
     if (this.peers.size === 0) {
       await this.setSessionState("DISCONNECTED");
-      await this.ctx.storage.setAlarm(Date.now() + EMPTY_SESSION_TIMEOUT_MS);
+      await this.ctx.storage.deleteAlarm();
       return;
     }
 

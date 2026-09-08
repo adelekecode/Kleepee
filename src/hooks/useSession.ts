@@ -13,8 +13,8 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
-const MAX_RETRIES = 3;
-const BACKOFF_DELAYS = [2000, 4000, 8000];
+const MAX_RETRIES: number | null = null;
+const BACKOFF_DELAYS = [2000, 4000, 8000, 15000];
 const MAX_BYTES = 65536;
 const SESSION_STORAGE_KEY = "kleepee.session.current";
 const HEARTBEAT_INTERVAL_MS = 25 * 1000;
@@ -61,7 +61,7 @@ interface SessionStore {
   error: SessionError | null;
   isPending: boolean;
   retryAttempt: number;
-  maxRetries: number;
+  maxRetries: number | null;
   dataChannelState: RTCDataChannelState | null;
   terminalReason: TerminalDisconnectReason;
 }
@@ -282,7 +282,7 @@ export interface UseSessionResult {
   error: SessionError | null;
   isPending: boolean;
   retryAttempt: number;
-  maxRetries: number;
+  maxRetries: number | null;
   dataChannelState: RTCDataChannelState | null;
   terminalReason: TerminalDisconnectReason;
   resumeStoredSession: (deviceName: string, deviceId: string) => Promise<SessionActionResult>;
@@ -484,7 +484,7 @@ export function useSession(): UseSessionResult {
       return;
     }
 
-    if (retryCountRef.current >= MAX_RETRIES) {
+    if (MAX_RETRIES !== null && retryCountRef.current >= MAX_RETRIES) {
       const error = makeError("connection_failed", "Could not reconnect to this session.");
       dispatch({ type: "ERROR", error });
       dispatch({ type: "DISCONNECTED", reason: "retries_exhausted" });
