@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { useDevice } from "../hooks/useDevice";
 import { useSession, type UseSessionResult } from "../hooks/useSession";
 import type { DeviceIdentity } from "../types";
@@ -12,6 +12,10 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const device = useDevice();
   const session = useSession();
+
+  useEffect(() => {
+    void session.resumeStoredSession(device.deviceName, device.deviceId);
+  }, [device.deviceId, device.deviceName]);
 
   return (
     <SessionContext.Provider value={{ ...session, device }}>

@@ -50,11 +50,17 @@ export function QRCode({ url }: QRCodeProps) {
         )}
       </div>
 
-      {failed && (
+      <div className="w-full space-y-2">
+        {failed && (
+          <p className="text-center text-xs font-medium text-kleepee-danger">
+            QR code failed. Use the link below.
+          </p>
+        )}
+
         <p className="max-w-full break-all rounded-[18px] border border-kleepee-border bg-kleepee-panel p-3 text-center text-xs leading-5 text-kleepee-muted">
           {url}
         </p>
-      )}
+      </div>
 
       <button className="btn-secondary" type="button" onClick={copyLink}>
         {copied ? "Copied!" : "Copy link"}

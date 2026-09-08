@@ -16,6 +16,8 @@ const ICE_SERVERS: RTCIceServer[] = [
 const MAX_RETRIES = 3;
 const BACKOFF_DELAYS = [2000, 4000, 8000];
 const MAX_BYTES = 65536;
+const SESSION_STORAGE_KEY = "kleepee.session.current";
+const HEARTBEAT_INTERVAL_MS = 25 * 1000;
 
 export type SessionErrorCode =
   | "blank"
@@ -55,6 +57,7 @@ interface SessionStore {
   peerDeviceName: string | null;
   items: TextItem[];
   initialText: string | null;
+  initialTextSent: boolean;
   error: SessionError | null;
   isPending: boolean;
   retryAttempt: number;
@@ -63,7 +66,7 @@ interface SessionStore {
   terminalReason: TerminalDisconnectReason;
 }
 
-const initialStore: SessionStore = {
+const emptyStore: SessionStore = {
   state: "WAITING",
   sessionId: null,
   sessionSecret: null,
@@ -71,6 +74,7 @@ const initialStore: SessionStore = {
   peerDeviceName: null,
   items: [],
   initialText: null,
+  initialTextSent: false,
   error: null,
   isPending: false,
   retryAttempt: 0,
@@ -79,10 +83,95 @@ const initialStore: SessionStore = {
   terminalReason: null,
 };
 
+interface StoredSession {
+  sessionId: string;
+  sessionSecret: string;
+  role: "initiator" | "joiner";
+  peerDeviceName: string | null;
+  items: TextItem[];
+  initialText: string | null;
+  initialTextSent: boolean;
+}
+
+function readStoredSession(): StoredSession | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as Partial<StoredSession>;
+    if (
+      typeof parsed.sessionId !== "string" ||
+      typeof parsed.sessionSecret !== "string" ||
+      (parsed.role !== "initiator" && parsed.role !== "joiner")
+    ) {
+      return null;
+    }
+
+    return {
+      sessionId: parsed.sessionId,
+      sessionSecret: parsed.sessionSecret,
+      role: parsed.role,
+      peerDeviceName: typeof parsed.peerDeviceName === "string" ? parsed.peerDeviceName : null,
+      items: Array.isArray(parsed.items) ? parsed.items.filter(isValidTextItem) : [],
+      initialText: typeof parsed.initialText === "string" ? parsed.initialText : null,
+      initialTextSent: parsed.initialTextSent === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSession(store: SessionStore): void {
+  if (typeof window === "undefined") return;
+
+  if (!store.sessionId || !store.sessionSecret || !store.role || store.state === "EXPIRED") {
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    return;
+  }
+
+  const stored: StoredSession = {
+    sessionId: store.sessionId,
+    sessionSecret: store.sessionSecret,
+    role: store.role,
+    peerDeviceName: store.peerDeviceName,
+    items: store.items,
+    initialText: store.initialText,
+    initialTextSent: store.initialTextSent,
+  };
+
+  window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(stored));
+}
+
+function clearStoredSession(): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+}
+
+function getInitialStore(): SessionStore {
+  const stored = readStoredSession();
+  if (!stored) return emptyStore;
+
+  return {
+    ...emptyStore,
+    state: stored.role === "initiator" && !stored.initialTextSent ? "WAITING" : "CONNECTING",
+    sessionId: stored.sessionId,
+    sessionSecret: stored.sessionSecret,
+    role: stored.role,
+    peerDeviceName: stored.peerDeviceName,
+    items: stored.items,
+    initialText: stored.initialText,
+    initialTextSent: stored.initialTextSent,
+    isPending: true,
+  };
+}
+
 type Action =
   | { type: "PENDING"; isPending: boolean }
   | { type: "SESSION_CREATED"; sessionId: string; sessionSecret: string; initialText: string }
   | { type: "SESSION_JOINED"; sessionId: string; sessionSecret: string }
+  | { type: "SESSION_RESTORED"; stored: StoredSession }
   | { type: "PEER_JOINED"; peerDeviceName: string }
   | { type: "CONNECTING" }
   | { type: "CONNECTED" }
@@ -91,6 +180,7 @@ type Action =
   | { type: "EXPIRED" }
   | { type: "CHANNEL_STATE"; dataChannelState: RTCDataChannelState | null }
   | { type: "ITEM_RECEIVED"; item: TextItem }
+  | { type: "INITIAL_TEXT_SENT" }
   | { type: "ERROR"; error: SessionError }
   | { type: "CLEAR_ERROR" }
   | { type: "RESET" };
@@ -101,20 +191,34 @@ function reducer(store: SessionStore, action: Action): SessionStore {
       return { ...store, isPending: action.isPending };
     case "SESSION_CREATED":
       return {
-        ...initialStore,
+        ...emptyStore,
         state: "WAITING",
         sessionId: action.sessionId,
         sessionSecret: action.sessionSecret,
         role: "initiator",
         initialText: action.initialText,
+        initialTextSent: false,
       };
     case "SESSION_JOINED":
       return {
-        ...initialStore,
+        ...emptyStore,
         state: "CONNECTING",
         sessionId: action.sessionId,
         sessionSecret: action.sessionSecret,
         role: "joiner",
+      };
+    case "SESSION_RESTORED":
+      return {
+        ...emptyStore,
+        state: action.stored.role === "initiator" && !action.stored.initialTextSent ? "WAITING" : "CONNECTING",
+        sessionId: action.stored.sessionId,
+        sessionSecret: action.stored.sessionSecret,
+        role: action.stored.role,
+        peerDeviceName: action.stored.peerDeviceName,
+        items: action.stored.items,
+        initialText: action.stored.initialText,
+        initialTextSent: action.stored.initialTextSent,
+        isPending: true,
       };
     case "PEER_JOINED":
       return { ...store, peerDeviceName: action.peerDeviceName };
@@ -156,12 +260,14 @@ function reducer(store: SessionStore, action: Action): SessionStore {
       return { ...store, dataChannelState: action.dataChannelState };
     case "ITEM_RECEIVED":
       return { ...store, items: [...store.items, action.item] };
+    case "INITIAL_TEXT_SENT":
+      return { ...store, initialTextSent: true };
     case "ERROR":
       return { ...store, error: action.error, isPending: false };
     case "CLEAR_ERROR":
       return { ...store, error: null };
     case "RESET":
-      return { ...initialStore };
+      return { ...emptyStore };
   }
 }
 
@@ -179,6 +285,7 @@ export interface UseSessionResult {
   maxRetries: number;
   dataChannelState: RTCDataChannelState | null;
   terminalReason: TerminalDisconnectReason;
+  resumeStoredSession: (deviceName: string, deviceId: string) => Promise<SessionActionResult>;
   createSession: (initialText: string, deviceName: string, deviceId: string) => Promise<SessionActionResult>;
   joinSession: (
     sessionId: string,
@@ -242,7 +349,7 @@ function mapJoinStatus(status: number): SessionError {
 }
 
 export function useSession(): UseSessionResult {
-  const [store, dispatch] = useReducer(reducer, initialStore);
+  const [store, dispatch] = useReducer(reducer, undefined, getInitialStore);
 
   const wsRef = useRef<WebSocket | null>(null);
   const rtcRef = useRef<WebRTCManager | null>(null);
@@ -259,6 +366,18 @@ export function useSession(): UseSessionResult {
   const deviceIdRef = useRef("");
   const dataChannelStateRef = useRef<RTCDataChannelState | null>(null);
   const intentionalCloseRef = useRef(false);
+  const resumedRef = useRef(false);
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function restoreRefs(stored: StoredSession, deviceName: string, deviceId: string) {
+    deviceNameRef.current = deviceName;
+    deviceIdRef.current = deviceId;
+    sessionIdRef.current = stored.sessionId;
+    sessionSecretRef.current = stored.sessionSecret;
+    roleRef.current = stored.role;
+    initialTextRef.current = stored.initialText;
+    initialTextSentRef.current = stored.initialTextSent;
+  }
 
   function clearRetryTimer() {
     if (retryTimerRef.current) {
@@ -267,8 +386,35 @@ export function useSession(): UseSessionResult {
     }
   }
 
+  function clearHeartbeatTimer() {
+    if (heartbeatTimerRef.current) {
+      clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+  }
+
+  function startHeartbeat() {
+    clearHeartbeatTimer();
+
+    heartbeatTimerRef.current = setInterval(() => {
+      if (!cryptoKeyRef.current || !rtcRef.current || rtcRef.current.dataChannelState !== "open") {
+        return;
+      }
+
+      void encrypt(
+        cryptoKeyRef.current,
+        JSON.stringify({ type: "ping", timestamp: Date.now() }),
+      ).then((payload) => {
+        rtcRef.current?.send(payload);
+      }).catch(() => {
+        /* ignore heartbeat failures; normal reconnect handles channel close */
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
   function closeTransports(clearKey: boolean) {
     clearRetryTimer();
+    clearHeartbeatTimer();
 
     try {
       wsRef.current?.close();
@@ -379,6 +525,14 @@ export function useSession(): UseSessionResult {
           const plain = await decrypt(cryptoKeyRef.current, data);
           const parsed = JSON.parse(plain) as unknown;
 
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            (parsed as { type?: unknown }).type === "ping"
+          ) {
+            return;
+          }
+
           if (isValidTextItem(parsed)) {
             dispatch({ type: "ITEM_RECEIVED", item: parsed });
           } else {
@@ -396,12 +550,14 @@ export function useSession(): UseSessionResult {
 
         if (channelState === "open") {
           retryCountRef.current = 0;
+          startHeartbeat();
           dispatch({ type: "CONNECTED" });
 
           if (roleRef.current === "initiator" && initialTextRef.current && !initialTextSentRef.current) {
             void transmitText(initialTextRef.current, deviceNameRef.current, deviceIdRef.current).then((result) => {
               if (result.ok) {
                 initialTextSentRef.current = true;
+                dispatch({ type: "INITIAL_TEXT_SENT" });
               }
             });
           }
@@ -409,6 +565,7 @@ export function useSession(): UseSessionResult {
         }
 
         if (channelState === "closed") {
+          clearHeartbeatTimer();
           scheduleReconnect("network");
         }
       },
@@ -437,7 +594,8 @@ export function useSession(): UseSessionResult {
 
     const wsBase = WORKER_BASE.replace(/^http/, "ws");
     const deviceName = encodeURIComponent(deviceNameRef.current || "Unknown Device");
-    const ws = new WebSocket(`${wsBase}/sessions/${encodeURIComponent(sessionId)}/ws?deviceName=${deviceName}`);
+    const deviceId = encodeURIComponent(deviceIdRef.current || crypto.randomUUID());
+    const ws = new WebSocket(`${wsBase}/sessions/${encodeURIComponent(sessionId)}/ws?deviceName=${deviceName}&deviceId=${deviceId}`);
     wsRef.current = ws;
 
     ws.onmessage = async (event: MessageEvent) => {
@@ -668,10 +826,42 @@ export function useSession(): UseSessionResult {
     return transmitText(text, deviceName, deviceId);
   }
 
+  async function resumeStoredSession(deviceName: string, deviceId: string): Promise<SessionActionResult> {
+    if (resumedRef.current || rtcRef.current || wsRef.current) {
+      return { ok: true };
+    }
+
+    const stored = readStoredSession();
+    if (!stored) {
+      return { ok: true };
+    }
+
+    resumedRef.current = true;
+    operationIdRef.current += 1;
+    const operationId = operationIdRef.current;
+    retryCountRef.current = 0;
+    intentionalCloseRef.current = false;
+    restoreRefs(stored, deviceName, deviceId);
+    dispatch({ type: "SESSION_RESTORED", stored });
+
+    try {
+      cryptoKeyRef.current = await deriveKey(stored.sessionSecret);
+      setupWebRTC(operationId);
+      openWebSocket(stored.sessionId, operationId);
+      return { ok: true };
+    } catch {
+      const error = makeError("join_invalid", "This saved session is not valid.");
+      dispatch({ type: "ERROR", error });
+      clearStoredSession();
+      return { ok: false, error };
+    }
+  }
+
   function disconnect() {
     operationIdRef.current += 1;
     intentionalCloseRef.current = true;
     closeTransports(true);
+    clearStoredSession();
     dispatch({ type: "DISCONNECTED", reason: "manual" });
   }
 
@@ -686,12 +876,17 @@ export function useSession(): UseSessionResult {
     sessionIdRef.current = null;
     sessionSecretRef.current = null;
     roleRef.current = null;
+    clearStoredSession();
     dispatch({ type: "RESET" });
   }
 
   function clearError() {
     dispatch({ type: "CLEAR_ERROR" });
   }
+
+  useEffect(() => {
+    writeStoredSession(store);
+  }, [store]);
 
   useEffect(() => {
     return () => {
@@ -715,6 +910,7 @@ export function useSession(): UseSessionResult {
     maxRetries: store.maxRetries,
     dataChannelState: store.dataChannelState,
     terminalReason: store.terminalReason,
+    resumeStoredSession,
     createSession,
     joinSession,
     sendText,

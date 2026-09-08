@@ -1,139 +1,123 @@
-/**
- * Session Durable Object — per-session state + WebSocket hibernation
- *
- * Uses Cloudflare Workers Durable Object WebSocket hibernation API:
- * ctx.acceptWebSocket / ctx.getWebSockets()
- *
- * Requirements: 3.3, 3.4, 9.1, 9.2, 9.4, 11.1–11.6
- */
-
 interface Env {
   SESSION_DO: DurableObjectNamespace;
 }
 
+type DurableSessionState =
+  | "WAITING"
+  | "CONNECTING"
+  | "CONNECTED"
+  | "DISCONNECTED"
+  | "EXPIRED";
+
+interface PeerAttachment {
+  peerId: string;
+  deviceId: string;
+  deviceName: string;
+}
+
+interface PeerRecord {
+  ws: WebSocket;
+  attachment: PeerAttachment;
+}
+
+const SESSION_STATE_KEY = "sessionState";
+const WAITING_TIMEOUT_MS = 10 * 60 * 1000;
+const EMPTY_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+
 export class SessionDurableObject implements DurableObject {
-  /** peerId → WebSocket (max 2 entries) */
-  private peers: Map<string, WebSocket> = new Map();
-
-  private sessionState: "WAITING" | "CONNECTING" | "CONNECTED" | "DISCONNECTED" | "EXPIRED" =
-    "WAITING";
-
-  /** Unix ms timestamp when this DO was first instantiated */
-  readonly createdAt: number = Date.now();
+  private peers: Map<string, PeerRecord> = new Map();
+  private sessionState: DurableSessionState = "WAITING";
 
   constructor(
     private ctx: DurableObjectState,
-    _env: Env
+    _env: Env,
   ) {}
 
-  // ---------------------------------------------------------------------------
-  // fetch — HTTP GET (state) and WebSocket upgrade
-  // ---------------------------------------------------------------------------
-
   async fetch(request: Request): Promise<Response> {
-    // Requirement 9.4 / design: expired sessions return 410 for any request
+    await this.loadSessionState();
+    this.restorePeers();
+
     if (this.sessionState === "EXPIRED") {
-      return new Response(JSON.stringify({ error: "Session expired" }), {
-        status: 410,
-        headers: { "Content-Type": "application/json" },
-      });
+      return this.json({ error: "Session expired" }, 410);
     }
 
     const upgradeHeader = request.headers.get("Upgrade");
 
-    // WebSocket upgrade path
     if (upgradeHeader?.toLowerCase() === "websocket") {
       return this.handleWebSocketUpgrade(request);
     }
 
-    // Plain HTTP GET — return session state
     if (request.method === "GET") {
-      return new Response(
-        JSON.stringify({
-          sessionState: this.sessionState,
-          deviceCount: this.peers.size,
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      return this.json({
+        sessionState: this.sessionState,
+        deviceCount: this.peers.size,
+      });
     }
 
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  // ---------------------------------------------------------------------------
-  // webSocketMessage — route signal.* messages to the OTHER peer
-  // ---------------------------------------------------------------------------
-
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    this.restorePeers();
+
+    const wireMessage = typeof message === "string" ? message : new TextDecoder().decode(message);
     let parsed: { type?: string } & Record<string, unknown>;
+
     try {
-      parsed = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message));
+      parsed = JSON.parse(wireMessage);
     } catch {
-      // Malformed JSON — silently discard
       return;
     }
 
-    const { type } = parsed;
     if (
-      type !== "signal.offer" &&
-      type !== "signal.answer" &&
-      type !== "signal.ice"
+      parsed.type !== "signal.offer" &&
+      parsed.type !== "signal.answer" &&
+      parsed.type !== "signal.ice"
     ) {
-      // Unknown message type — discard
       return;
     }
 
-    const senderId = ws.deserializeAttachment() as string | null;
-    const otherPeer = this.findOtherPeer(senderId);
-    if (!otherPeer) {
-      // Other peer not present yet — discard
-      return;
-    }
-
-    otherPeer.send(typeof message === "string" ? message : new TextDecoder().decode(message));
+    const sender = this.getAttachment(ws);
+    const otherPeer = this.findOtherPeer(sender?.peerId ?? null);
+    otherPeer?.send(wireMessage);
   }
 
-  // ---------------------------------------------------------------------------
-  // webSocketClose — clean up + notify remaining peer
-  // ---------------------------------------------------------------------------
-
   webSocketClose(ws: WebSocket): void {
-    const peerId = ws.deserializeAttachment() as string | null;
-    if (peerId) {
-      this.peers.delete(peerId);
-    }
+    this.restorePeers();
 
-    // Notify any remaining peer
-    for (const [, peerWs] of this.peers) {
+    const attachment = this.getAttachment(ws);
+    if (!attachment) return;
+
+    const currentPeer = this.peers.get(attachment.peerId);
+    if (currentPeer?.ws !== ws) return;
+
+    this.peers.delete(attachment.peerId);
+
+    for (const [, peer] of this.peers) {
       try {
-        peerWs.send(JSON.stringify({ type: "peer.leave" }));
+        peer.ws.send(JSON.stringify({ type: "peer.leave" }));
       } catch {
-        // Peer already closed — ignore
+        /* ignore closed sockets */
       }
     }
 
-    // If both peers are gone, set a short grace-period alarm (30 s)
-    if (this.peers.size === 0) {
-      this.ctx.storage.setAlarm(Date.now() + 30 * 1000);
-    }
+    void this.updateStateAfterClose();
   }
 
-  // ---------------------------------------------------------------------------
-  // alarm — expire session and notify any lingering connections
-  // ---------------------------------------------------------------------------
-
   async alarm(): Promise<void> {
-    // Only expire if in WAITING state (10-min timeout) or both peers are gone
-    // (grace-period after both disconnected). If the session has active peers,
-    // the alarm was set during a previous state and no longer applies.
+    await this.loadSessionState();
+    this.restorePeers();
+
     if (this.sessionState !== "WAITING" && this.peers.size > 0) {
       return;
     }
 
+    if (this.sessionState === "CONNECTED" && this.peers.size > 0) {
+      return;
+    }
+
     this.sessionState = "EXPIRED";
+    await this.ctx.storage.put(SESSION_STATE_KEY, this.sessionState);
 
     const expiredMessage = JSON.stringify({ type: "session.expired" });
     for (const ws of this.ctx.getWebSockets()) {
@@ -141,51 +125,56 @@ export class SessionDurableObject implements DurableObject {
         ws.send(expiredMessage);
         ws.close(4410, "Session expired");
       } catch {
-        // Already closed
+        /* ignore closed sockets */
       }
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Private helpers
-  // ---------------------------------------------------------------------------
+  private async handleWebSocketUpgrade(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const deviceId = url.searchParams.get("deviceId") || crypto.randomUUID();
+    const deviceName = url.searchParams.get("deviceName") || "Unknown Device";
 
-  private handleWebSocketUpgrade(request: Request): Response {
-    // Requirement 3.4 / 9.4: max 2 peers per session
-    if (this.peers.size >= 2) {
-      return new Response(JSON.stringify({ error: "Session is full" }), {
-        status: 409,
-        headers: { "Content-Type": "application/json" },
-      });
+    const sameDevicePeer = this.findPeerByDeviceId(deviceId);
+    if (sameDevicePeer) {
+      this.peers.delete(sameDevicePeer.attachment.peerId);
+      try {
+        sameDevicePeer.ws.close(4401, "Device reconnected");
+      } catch {
+        /* ignore closed sockets */
+      }
     }
 
-    // Read optional deviceName from query string (e.g. ?deviceName=Blue+Panda)
-    const url = new URL(request.url);
-    const deviceName = url.searchParams.get("deviceName") ?? "Unknown Device";
+    if (this.peers.size >= 2) {
+      return this.json({ error: "Session is full" }, 409);
+    }
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+    const attachment: PeerAttachment = {
+      peerId: crypto.randomUUID(),
+      deviceId,
+      deviceName,
+    };
 
-    // Use hibernation API — lets the DO sleep between messages
     this.ctx.acceptWebSocket(server);
+    server.serializeAttachment(attachment);
+    this.peers.set(attachment.peerId, { ws: server, attachment });
 
-    const peerId = crypto.randomUUID();
-    // Attach peerId to the socket so we can identify it in handlers
-    server.serializeAttachment(peerId);
-    this.peers.set(peerId, server);
-
-    // On first peer join, set a 10-minute alarm (Requirement 2.6 / 9.1)
     if (this.peers.size === 1) {
-      this.ctx.storage.setAlarm(Date.now() + 10 * 60 * 1000);
+      await this.setSessionState("WAITING");
+      await this.ctx.storage.setAlarm(Date.now() + WAITING_TIMEOUT_MS);
     }
 
-    // Notify the OTHER peer that a new device joined (Requirement 11.4)
-    this.notifyOtherPeer(peerId, JSON.stringify({ type: "peer.join", deviceName }));
-
-    // Advance session state on second peer join (Requirement 3.3)
-    if (this.peers.size === 2 && this.sessionState === "WAITING") {
-      this.sessionState = "CONNECTING";
+    if (this.peers.size === 2) {
+      await this.setSessionState("CONNECTED");
+      await this.ctx.storage.deleteAlarm();
     }
+
+    this.notifyOtherPeer(
+      attachment.peerId,
+      JSON.stringify({ type: "peer.join", deviceName: attachment.deviceName }),
+    );
 
     return new Response(null, {
       status: 101,
@@ -193,30 +182,106 @@ export class SessionDurableObject implements DurableObject {
     });
   }
 
-  /**
-   * Send a message to every peer EXCEPT the one identified by `senderId`.
-   */
+  private async updateStateAfterClose(): Promise<void> {
+    this.restorePeers();
+
+    if (this.sessionState === "EXPIRED") {
+      return;
+    }
+
+    if (this.peers.size === 0) {
+      await this.setSessionState("DISCONNECTED");
+      await this.ctx.storage.setAlarm(Date.now() + EMPTY_SESSION_TIMEOUT_MS);
+      return;
+    }
+
+    await this.setSessionState("DISCONNECTED");
+  }
+
+  private async loadSessionState(): Promise<void> {
+    const storedState = await this.ctx.storage.get<DurableSessionState>(SESSION_STATE_KEY);
+    this.sessionState = storedState ?? this.sessionState;
+  }
+
+  private async setSessionState(state: DurableSessionState): Promise<void> {
+    this.sessionState = state;
+    await this.ctx.storage.put(SESSION_STATE_KEY, state);
+  }
+
+  private restorePeers(): void {
+    const restoredPeers = new Map<string, PeerRecord>();
+
+    for (const ws of this.ctx.getWebSockets()) {
+      const attachment = this.getAttachment(ws);
+      if (!attachment) continue;
+      restoredPeers.set(attachment.peerId, { ws, attachment });
+    }
+
+    this.peers = restoredPeers;
+  }
+
+  private getAttachment(ws: WebSocket): PeerAttachment | null {
+    const attachment = ws.deserializeAttachment() as PeerAttachment | string | null;
+
+    if (!attachment) {
+      return null;
+    }
+
+    if (typeof attachment === "string") {
+      return {
+        peerId: attachment,
+        deviceId: attachment,
+        deviceName: "Unknown Device",
+      };
+    }
+
+    if (
+      typeof attachment.peerId === "string" &&
+      typeof attachment.deviceId === "string" &&
+      typeof attachment.deviceName === "string"
+    ) {
+      return attachment;
+    }
+
+    return null;
+  }
+
+  private findPeerByDeviceId(deviceId: string): PeerRecord | null {
+    for (const [, peer] of this.peers) {
+      if (peer.attachment.deviceId === deviceId) {
+        return peer;
+      }
+    }
+
+    return null;
+  }
+
   private notifyOtherPeer(senderId: string | null, message: string): void {
-    for (const [id, ws] of this.peers) {
+    for (const [id, peer] of this.peers) {
       if (id !== senderId) {
         try {
-          ws.send(message);
+          peer.ws.send(message);
         } catch {
-          // Peer already closed — ignore
+          /* ignore closed sockets */
         }
       }
     }
   }
 
-  /**
-   * Return the WebSocket of the peer that is NOT `senderId`, or null if not found.
-   */
   private findOtherPeer(senderId: string | null): WebSocket | null {
-    for (const [id, ws] of this.peers) {
+    for (const [id, peer] of this.peers) {
       if (id !== senderId) {
-        return ws;
+        return peer.ws;
       }
     }
+
     return null;
+  }
+
+  private json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
