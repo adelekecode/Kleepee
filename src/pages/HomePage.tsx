@@ -1,113 +1,67 @@
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { TextInput } from "../components/TextInput";
+import { Composer, type ComposerResult } from "../components/Composer";
 import { RecentSessions } from "../components/RecentSessions";
 import { useSessionContext } from "../context/SessionContext";
 import { parseJoinURL } from "../lib/qr";
 
 export function HomePage() {
   const navigate = useNavigate();
-  const { createSession, device, error, isPending, reset } = useSessionContext();
+  const { createSession, enqueueFiles, device, error, isPending, reset } = useSessionContext();
+  const joinId = useId();
   const [joinOpen, setJoinOpen] = useState(false);
   const [joinLink, setJoinLink] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
 
-  async function handleShare(text: string) {
-    const result = await createSession(text, device.deviceName, device.deviceId);
-
-    if (result.ok) {
-      navigate("/waiting");
+  async function handleShare(text: string, files: File[]): Promise<ComposerResult> {
+    const result = await createSession(text, device.deviceName, device.deviceId, files.length > 0);
+    if (!result.ok) return { textSent: false, accepted: [], errors: [result.error.message] };
+    const queued = enqueueFiles(files);
+    if (queued.errors.length) {
+      reset();
+      return { textSent: false, accepted: [], errors: queued.errors };
     }
-
-    return result.ok;
+    navigate("/waiting");
+    return { textSent: true, ...queued };
   }
 
   function handleJoin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     try {
       const parsed = parseJoinURL(joinLink.trim());
-
-      if (!parsed.sessionId || !parsed.sessionSecret) {
-        throw new Error("Missing session details");
-      }
-
+      if (!parsed.sessionId || !parsed.sessionSecret) throw new Error("Missing session details");
       setJoinError(null);
+      reset();
       navigate(`/j/${encodeURIComponent(parsed.sessionId)}#${parsed.sessionSecret}`);
     } catch {
-      setJoinError("Paste a valid Kleepee join link.");
+      setJoinError("Paste the complete Kleepee join link, including everything after #.");
     }
   }
 
   return (
-    <main className="fade-in flex flex-1 flex-col justify-center gap-6 py-8">
-      <section className="flex items-start justify-between gap-4">
-        <div className="space-y-3">
-          <h1 className="max-w-[12ch] text-4xl font-semibold leading-tight text-kleepee-espresso sm:text-5xl">
-            Text, from here to there.
-          </h1>
-          <p className="max-w-md text-base leading-7 text-kleepee-muted">
-            Private, encrypted sharing between two devices.
-          </p>
-        </div>
-
-        <button
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-kleepee-border bg-kleepee-surface text-2xl leading-none text-kleepee-espresso shadow-sm transition hover:bg-kleepee-panel focus:outline-none focus:ring-2 focus:ring-kleepee-focus focus:ring-offset-2 focus:ring-offset-kleepee-bg"
-          type="button"
-          aria-label="Join a session"
-          title="Join a session"
-          onClick={() => {
-            setJoinOpen((open) => !open);
-            setJoinError(null);
-          }}
-        >
-          +
-        </button>
+    <main className="fade-in flex flex-1 flex-col justify-center gap-6 py-8 sm:py-12">
+      <section className="space-y-4">
+        <h1 className="max-w-[15ch] text-4xl font-medium leading-tight text-kleepee-espresso sm:text-5xl">From here to there.</h1>
+        <p className="max-w-md text-base leading-7 text-kleepee-muted">Share text and small files between your devices. Private, encrypted, and simple.</p>
       </section>
 
-      {joinOpen && (
-        <section className="panel">
-          <form className="flex flex-col gap-3" onSubmit={handleJoin}>
-            <label className="text-sm font-medium text-kleepee-espresso" htmlFor="join-link">
-              Join session
-            </label>
-            <input
-              id="join-link"
-              className="input-field min-h-0"
-              value={joinLink}
-              placeholder="Paste a Kleepee link..."
-              onChange={(event) => {
-                setJoinLink(event.target.value);
-                if (joinError) setJoinError(null);
-              }}
-            />
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="min-h-5 text-sm text-kleepee-danger">{joinError}</p>
-              <button className="btn-primary w-full sm:w-auto" type="submit">
-                Join
-              </button>
-            </div>
-          </form>
-        </section>
-      )}
+      <Composer actionLabel="Create sharing link" pending={isPending} error={error?.message} onSubmit={handleShare} />
+      <p className="-mt-3 text-sm leading-6 text-kleepee-muted">Create a link, then scan the QR code on your other device. Files start sending when you connect.</p>
 
-      <section className="panel">
-        <TextInput
-          label="Text to share"
-          placeholder="Paste or type something..."
-          actionLabel="Share text"
-          pending={isPending}
-          error={error?.message}
-          onSubmit={handleShare}
-        />
-      </section>
+      <div className="flex items-center gap-3"><span className="h-px flex-1 bg-kleepee-border" /><span className="text-xs text-kleepee-muted">Already have a link?</span><span className="h-px flex-1 bg-kleepee-border" /></div>
+      <button className="btn-secondary self-center gap-2" type="button" aria-expanded={joinOpen} aria-controls={joinId} disabled={isPending}
+        onClick={() => { setJoinOpen((open) => !open); setJoinError(null); }}><span aria-hidden="true" className="text-xl leading-none">+</span> Join session</button>
 
-      {error && (
-        <button className="self-start text-sm font-medium text-kleepee-muted underline-offset-4 hover:underline" type="button" onClick={reset}>
-          Start over
-        </button>
-      )}
-
+      {joinOpen && <section className="panel" id={joinId}>
+        <form className="flex flex-col gap-3" onSubmit={handleJoin}>
+          <label className="text-sm font-medium text-kleepee-espresso" htmlFor={`${joinId}-input`}>Session link</label>
+          <input id={`${joinId}-input`} className="input-field min-h-0" value={joinLink} autoFocus autoComplete="off" autoCapitalize="none" spellCheck={false}
+            placeholder="Paste the full Kleepee link…" aria-invalid={Boolean(joinError)} aria-describedby={joinError ? `${joinId}-error` : undefined}
+            onChange={(event) => { setJoinLink(event.target.value); setJoinError(null); }} />
+          {joinError && <p id={`${joinId}-error`} className="text-sm text-kleepee-danger" role="alert">{joinError}</p>}
+          <button className="btn-primary self-end" type="submit" disabled={!joinLink.trim() || isPending}>Join</button>
+        </form>
+      </section>}
       <RecentSessions onResume={() => reset()} />
     </main>
   );

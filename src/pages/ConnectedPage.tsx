@@ -1,11 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { StatusBar } from "../components/StatusBar";
 import { TextFeed } from "../components/TextFeed";
-import { TextInput } from "../components/TextInput";
+import { Composer, type ComposerResult } from "../components/Composer";
 import { MessageToast } from "../components/MessageToast";
 import { useSessionContext } from "../context/SessionContext";
 import { useNotifications } from "../hooks/useNotifications";
+import type { FeedItem } from "../types";
 
 export function ConnectedPage() {
   const navigate = useNavigate();
@@ -24,42 +25,70 @@ export function ConnectedPage() {
     sendText,
     disconnect,
     reset,
+    fileTransfers,
+    fileItems,
+    enqueueFiles,
+    retryFile,
+    cancelFile,
   } = useSessionContext();
 
-  const { permission, soundEnabled, systemSupported, toast, requestPermission, notify, dismissToast, toggleSound, unlockAudio } = useNotifications();
-  const prevItemCountRef = useRef(items.length);
+  const {
+    permission,
+    soundEnabled,
+    systemSupported,
+    toast,
+    requestPermission,
+    notify,
+    dismissToast,
+    toggleSound,
+    unlockAudio,
+  } = useNotifications();
 
-  // Fire notification whenever a new item arrives
+  const prevItemCountRef = useRef(items.length + fileItems.length);
+  const [dropError, setDropError] = useState<string | null>(null);
+
+  // Notify on new incoming items (text or file)
   useEffect(() => {
-    if (items.length > prevItemCountRef.current) {
-      const latest = items[items.length - 1];
-      notify(latest, device.deviceId);
+    const total = items.length + fileItems.length;
+    if (total > prevItemCountRef.current) {
+      const latestText = items[items.length - 1];
+      const latestFile = fileItems[fileItems.length - 1];
+      // Pick whichever is more recent
+      const latest =
+        latestFile && (!latestText || latestFile.timestamp >= latestText.timestamp)
+          ? latestFile
+          : latestText;
+      if (latest) {
+        const preview = latest.type === "text" ? latest.content : `📎 ${latest.fileName}`;
+        // Reuse notify by adapting to its TextItem-like signature
+        notify(
+          { ...latest, type: "text", content: preview, id: latest.id } as Parameters<typeof notify>[0],
+          device.deviceId,
+        );
+      }
     }
-    prevItemCountRef.current = items.length;
-  }, [items, device.deviceId, notify]);
+    prevItemCountRef.current = items.length + fileItems.length;
+  }, [items, fileItems, device.deviceId, notify]);
 
   useEffect(() => {
-    if (state === "EXPIRED") {
-      navigate("/expired", { replace: true });
-    }
+    if (state === "EXPIRED") navigate("/expired", { replace: true });
   }, [navigate, state]);
 
-  if (!sessionId) {
-    return <Navigate to="/" replace />;
-  }
-
-  if (state === "WAITING" && role === "initiator") {
-    return <Navigate to="/waiting" replace />;
-  }
+  if (!sessionId) return <Navigate to="/" replace />;
+  if (state === "WAITING" && role === "initiator") return <Navigate to="/waiting" replace />;
 
   const canSend = state === "CONNECTED" && dataChannelState === "open";
   const ended = state === "DISCONNECTED" && terminalReason === "manual";
   const exhausted = state === "DISCONNECTED" && terminalReason === "retries_exhausted";
 
-  async function handleSend(text: string) {
-    unlockAudio(); // unlock AudioContext on this user gesture for mobile
+  async function handleSubmit(text: string, files: File[]): Promise<ComposerResult> {
+    unlockAudio();
+    setDropError(null);
+    if (!canSend) return { textSent: false, accepted: [], errors: ["Wait for the connection before sending."] };
+    const queued = enqueueFiles(files);
+    if (!text.trim()) return { textSent: false, ...queued };
     const result = await sendText(text, device.deviceName, device.deviceId);
-    return result.ok;
+    return { textSent: result.ok, accepted: queued.accepted, errors: [...queued.errors, ...(!result.ok ? [result.error.message] : [])] };
   }
 
   function createNewSession() {
@@ -71,9 +100,15 @@ export function ConnectedPage() {
     window.open("/", "_blank", "noopener,noreferrer");
   }
 
+  // Merge text items and file items into a single sorted feed
+  const feedItems: FeedItem[] = [...items, ...fileItems].sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
+
   return (
     <main className="fade-in flex min-h-0 flex-1 flex-col gap-4 pb-2">
       {toast && <MessageToast toast={toast} onDismiss={dismissToast} />}
+
       <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <StatusBar
           state={state}
@@ -90,16 +125,12 @@ export function ConnectedPage() {
           </button>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {/* Notification controls — sound toggle always shown, system notif only where supported */}
             <button
               className="btn-secondary"
               type="button"
               title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
               aria-label={soundEnabled ? "Mute notification sounds" : "Unmute notification sounds"}
-              onClick={() => {
-                unlockAudio(); // also a user gesture — unlock audio here on mobile
-                toggleSound();
-              }}
+              onClick={() => { unlockAudio(); toggleSound(); }}
             >
               {soundEnabled ? "🔔" : "🔕"}
             </button>
@@ -118,19 +149,23 @@ export function ConnectedPage() {
         )}
       </section>
 
-      <TextFeed items={items} />
+      <TextFeed
+        items={feedItems}
+        transfers={fileTransfers}
+        onCancelTransfer={cancelFile}
+        onRetryTransfer={canSend ? retryFile : undefined}
+        onDropFiles={(files) => {
+          if (!canSend) { setDropError("Wait for the connection before dropping files."); return; }
+          const result = enqueueFiles(files);
+          setDropError(result.errors.length ? result.errors.join(" ") : null);
+        }}
+      />
 
-      <section className="panel">
-        <TextInput
-          label="Message"
-          placeholder={canSend ? "Paste or type something..." : "Session ended"}
-          actionLabel="Send"
-          disabled={!canSend}
-          minRows={3}
-          error={error?.message}
-          onSubmit={handleSend}
-        />
-      </section>
+      <Composer
+        disabled={!canSend}
+        error={dropError ?? error?.message}
+        onSubmit={handleSubmit}
+      />
     </main>
   );
 }

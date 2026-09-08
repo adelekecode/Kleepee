@@ -16,6 +16,7 @@ export class WebRTCManager {
   private pendingIceCandidates: RTCIceCandidateInit[] = [];
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
   private failureReported = false;
+  private sendWaiters = new Set<() => void>();
 
   constructor(iceServers: RTCIceServer[] | (() => Promise<RTCIceServer[]>), callbacks: WebRTCCallbacks) {
     this.iceServers = iceServers;
@@ -171,11 +172,53 @@ export class WebRTCManager {
    */
   send(data: Uint8Array): boolean {
     if (this.dataChannel?.readyState === "open") {
-      this.dataChannel.send(data);
-      return true;
+      try {
+        if (data.byteLength > this.maxMessageSize) return false;
+        this.dataChannel.send(data);
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     return false;
+  }
+
+  get maxMessageSize(): number {
+    return this.pc?.sctp?.maxMessageSize ?? 65536;
+  }
+
+  /** Files wait for bounded buffer space, leaving room for interactive text. */
+  async sendBuffered(data: Uint8Array, signal: AbortSignal): Promise<boolean> {
+    const channel = this.dataChannel;
+    if (!channel || channel.readyState !== "open" || signal.aborted || data.byteLength > this.maxMessageSize) return false;
+    if (channel.bufferedAmount > 256 * 1024) {
+      const ready = await new Promise<boolean>((resolve) => {
+        const finish = (ok: boolean) => {
+          clearTimeout(timer);
+          this.sendWaiters.delete(closed);
+          channel.removeEventListener("bufferedamountlow", drained);
+          channel.removeEventListener("close", closed);
+          channel.removeEventListener("error", closed);
+          signal.removeEventListener("abort", closed);
+          resolve(ok);
+        };
+        const drained = () => finish(true);
+        const closed = () => finish(false);
+        const timer = setTimeout(closed, 60_000);
+        this.sendWaiters.add(closed);
+        channel.bufferedAmountLowThreshold = 128 * 1024;
+        channel.addEventListener("bufferedamountlow", drained, { once: true });
+        channel.addEventListener("close", closed, { once: true });
+        channel.addEventListener("error", closed, { once: true });
+        signal.addEventListener("abort", closed, { once: true });
+        if (signal.aborted || channel.readyState !== "open") closed();
+        else if (channel.bufferedAmount <= 128 * 1024) drained();
+      });
+      if (!ready) return false;
+    }
+    if (signal.aborted || this.dataChannel !== channel) return false;
+    return this.send(data);
   }
 
   /**
@@ -190,6 +233,7 @@ export class WebRTCManager {
    */
   close(): void {
     this.generation += 1;
+    for (const stop of this.sendWaiters) stop();
     this.clearConnectionTimer();
     // Closing an old transport must not start another reconnect attempt.
     if (this.dataChannel) {

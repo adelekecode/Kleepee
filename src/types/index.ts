@@ -14,6 +14,11 @@ export interface TextItem {
   content: string;
 }
 
+export type { FileItem, FileTransfer } from "./files";
+
+/** Union of all items that can appear in the feed */
+export type FeedItem = TextItem | import("./files").FileItem;
+
 export interface DeviceIdentity {
   deviceId: string;
   deviceName: string;

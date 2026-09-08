@@ -1,21 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebRTCManager } from "./webrtc";
 
-class FakeChannel {
+class FakeChannel extends EventTarget {
   readyState = "connecting";
   binaryType = "";
+  bufferedAmount = 0;
+  bufferedAmountLowThreshold = 0;
   onopen: (() => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage = null;
   send = vi.fn();
-  close = vi.fn(() => { this.readyState = "closed"; this.onclose?.(); });
+  close = vi.fn(() => { this.readyState = "closed"; this.onclose?.(); this.dispatchEvent(new Event("close")); });
 }
 
 class FakePeer {
   static instances: FakePeer[] = [];
   connectionState = "new";
   iceConnectionState = "new";
+  sctp = { maxMessageSize: 65536 };
   remoteDescription: RTCSessionDescriptionInit | null = null;
   onconnectionstatechange: (() => void) | null = null;
   oniceconnectionstatechange: (() => void) | null = null;
@@ -130,5 +133,117 @@ describe("WebRTC connection recovery", () => {
     await expect(offer).rejects.toThrow("cancelled");
     expect(FakePeer.instances).toHaveLength(0);
     expect(onStateChange).not.toHaveBeenCalled();
+  });
+
+  it("waits for the send buffer to drain before sending a file frame", async () => {
+    await manager.createOffer();
+    const channel = FakePeer.instances[0].channel;
+    channel.readyState = "open";
+    channel.onopen?.();
+    channel.bufferedAmount = 300 * 1024;
+    const data = new Uint8Array([1, 2, 3]);
+    const pending = manager.sendBuffered(data, new AbortController().signal);
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(channel.bufferedAmountLowThreshold).toBe(128 * 1024);
+    // Text remains available while the file sender waits for buffer space.
+    expect(manager.send(new Uint8Array([42]))).toBe(true);
+    expect(channel.send).toHaveBeenCalledTimes(1);
+    channel.bufferedAmount = 128 * 1024;
+    channel.dispatchEvent(new Event("bufferedamountlow"));
+    await expect(pending).resolves.toBe(true);
+    expect(channel.send).toHaveBeenLastCalledWith(data);
+    expect(channel.send).toHaveBeenCalledTimes(2);
+    // A stale event cannot send the frame twice or retain a timeout.
+    channel.dispatchEvent(new Event("bufferedamountlow"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(channel.send).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["abort", "close", "error", "manager-close"])("wakes a blocked file send on %s and removes listeners", async (reason) => {
+    await manager.createOffer();
+    const channel = FakePeer.instances[0].channel;
+    channel.readyState = "open";
+    channel.onopen?.();
+    channel.bufferedAmount = 300 * 1024;
+    const removeListener = vi.spyOn(channel, "removeEventListener");
+    const controller = new AbortController();
+    const pending = manager.sendBuffered(new Uint8Array([1]), controller.signal);
+    if (reason === "abort") controller.abort();
+    else if (reason === "manager-close") manager.close();
+    else if (reason === "close") channel.close();
+    else channel.dispatchEvent(new Event("error"));
+    await expect(pending).resolves.toBe(false);
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(removeListener.mock.calls.map(([type]) => type)).toEqual(["bufferedamountlow", "close", "error"]);
+    channel.bufferedAmount = 0;
+    channel.dispatchEvent(new Event("bufferedamountlow"));
+    expect(channel.send).not.toHaveBeenCalled();
+  });
+
+  it("times out a buffer which never drains", async () => {
+    await manager.createOffer();
+    const channel = FakePeer.instances[0].channel;
+    channel.readyState = "open";
+    channel.onopen?.();
+    channel.bufferedAmount = 300 * 1024;
+    const pending = manager.sendBuffered(new Uint8Array([1]), new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(pending).resolves.toBe(false);
+    expect(channel.send).not.toHaveBeenCalled();
+  });
+
+  it("enforces the negotiated message size for normal and buffered sends", async () => {
+    await manager.createOffer();
+    const pc = FakePeer.instances[0];
+    pc.channel.readyState = "open";
+    pc.sctp.maxMessageSize = 1024;
+    const signal = new AbortController().signal;
+    expect(manager.maxMessageSize).toBe(1024);
+    await expect(manager.sendBuffered(new Uint8Array(1025), signal)).resolves.toBe(false);
+    expect(manager.send(new Uint8Array(1025))).toBe(false);
+    expect(pc.channel.send).not.toHaveBeenCalled();
+    await expect(manager.sendBuffered(new Uint8Array(1024), signal)).resolves.toBe(true);
+    expect(manager.send(new Uint8Array(1024))).toBe(true);
+    expect(pc.channel.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a channel send exception as failure without throwing", async () => {
+    await manager.createOffer();
+    const channel = FakePeer.instances[0].channel;
+    channel.readyState = "open";
+    channel.send.mockImplementation(() => { throw new DOMException("Buffer full", "OperationError"); });
+    await expect(manager.sendBuffered(new Uint8Array([1]), new AbortController().signal)).resolves.toBe(false);
+    expect(manager.send(new Uint8Array([1]))).toBe(false);
+  });
+
+  it("rejects closed channels and already-aborted transfers before sending", async () => {
+    const signal = new AbortController().signal;
+    await expect(manager.sendBuffered(new Uint8Array([1]), signal)).resolves.toBe(false);
+    await manager.createOffer();
+    const channel = FakePeer.instances[0].channel;
+    await expect(manager.sendBuffered(new Uint8Array([1]), signal)).resolves.toBe(false);
+    channel.readyState = "open";
+    const controller = new AbortController();
+    controller.abort();
+    await expect(manager.sendBuffered(new Uint8Array([1]), controller.signal)).resolves.toBe(false);
+    expect(channel.send).not.toHaveBeenCalled();
+  });
+
+  it("cannot send a waiting frame into a replacement connection", async () => {
+    await manager.createOffer();
+    const oldChannel = FakePeer.instances[0].channel;
+    oldChannel.readyState = "open";
+    oldChannel.bufferedAmount = 300 * 1024;
+    const pending = manager.sendBuffered(new Uint8Array([1]), new AbortController().signal);
+    await manager.createOffer();
+    const replacement = FakePeer.instances[1].channel;
+    replacement.readyState = "open";
+    oldChannel.bufferedAmount = 0;
+    oldChannel.dispatchEvent(new Event("bufferedamountlow"));
+    await expect(pending).resolves.toBe(false);
+    expect(oldChannel.send).not.toHaveBeenCalled();
+    expect(replacement.send).not.toHaveBeenCalled();
+    await expect(manager.sendBuffered(new Uint8Array([2]), new AbortController().signal)).resolves.toBe(true);
+    expect(replacement.send).toHaveBeenCalledWith(new Uint8Array([2]));
   });
 });

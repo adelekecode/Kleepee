@@ -1,9 +1,11 @@
 import { useEffect, useReducer, useRef } from "react";
 import { WebRTCManager } from "../lib/webrtc";
 import { createIceServerLoader } from "../lib/iceServers";
-import { deriveKey, encrypt, decrypt, generateSessionSecret } from "../lib/crypto";
+import { deriveKey, encrypt, decryptBytes, encryptBytes, generateSessionSecret } from "../lib/crypto";
 import { recordSession } from "../lib/sessionHistory";
+import { CHUNK_SIZE, FRAME_OVERHEAD, decodeFileFrame, encodeFileFrame, isFileFrame } from "../lib/fileTransfer";
 import type { ClientMessage, ServerMessage, SessionState, TextItem } from "../types";
+import type { FileTransport } from "../types/files";
 
 const WORKER_BASE =
   typeof import.meta.env !== "undefined" && import.meta.env.VITE_WORKER_URL
@@ -20,6 +22,7 @@ const JOIN_OFFER_TIMEOUT_MS = 15 * 1000;
 export type SessionErrorCode =
   | "blank"
   | "too_large"
+  | "file_too_large"
   | "create_failed"
   | "join_invalid"
   | "session_full"
@@ -286,7 +289,7 @@ export interface UseSessionResult {
   dataChannelState: RTCDataChannelState | null;
   terminalReason: TerminalDisconnectReason;
   resumeStoredSession: (deviceName: string, deviceId: string) => Promise<SessionActionResult>;
-  createSession: (initialText: string, deviceName: string, deviceId: string) => Promise<SessionActionResult>;
+  createSession: (initialText: string, deviceName: string, deviceId: string, allowEmpty?: boolean) => Promise<SessionActionResult>;
   joinSession: (
     sessionId: string,
     sessionSecret: string,
@@ -297,6 +300,9 @@ export interface UseSessionResult {
   disconnect: () => void;
   reset: () => void;
   clearError: () => void;
+  /** Register a handler that receives decrypted file frames from the DataChannel */
+  setFileFrameHandler: (handler: ((frame: unknown) => void) | null) => void;
+  getFileTransport: () => FileTransport | null;
 }
 
 function makeError(code: SessionErrorCode, message: string, status?: number): SessionError {
@@ -379,6 +385,9 @@ export function useSession(): UseSessionResult {
   // creating stale closures inside imperative functions.
   const storeRef = useRef(store);
   storeRef.current = store;
+  // External handler for file frames — set by the consumer (ConnectedPage via context)
+  const onFileFrameRef = useRef<((frame: unknown) => void) | null>(null);
+  const fileTransportRef = useRef<{ manager: WebRTCManager; transport: FileTransport } | null>(null);
 
   function restoreRefs(stored: StoredSession, deviceName: string, deviceId: string) {
     deviceNameRef.current = deviceName;
@@ -597,19 +606,43 @@ export function useSession(): UseSessionResult {
         load: createIceServerLoader(WORKER_BASE, sessionId, deviceIdRef.current),
       };
     }
-    const manager = new WebRTCManager(iceLoaderRef.current.load, {
-      onMessage: async (data: Uint8Array) => {
+    let receiveQueue = Promise.resolve();
+    const loadIce = iceLoaderRef.current.load;
+    const manager = new WebRTCManager(async () => {
+      const servers = await loadIce();
+      if (import.meta.env.VITE_ALLOW_TURN_RELAY === "true") return servers;
+      // Direct-only by default: a TURN candidate would relay file ciphertext.
+      return servers.flatMap((server) => {
+        const urls = (Array.isArray(server.urls) ? server.urls : [server.urls])
+          .filter((url) => url.startsWith("stun:"));
+        return urls.length ? [{ urls }] : [];
+      });
+    }, {
+      onMessage: (data: Uint8Array) => {
+        receiveQueue = receiveQueue.then(async () => {
         if (operationId !== operationIdRef.current || rtcRef.current !== manager || !cryptoKeyRef.current) return;
 
         try {
-          const plain = await decrypt(cryptoKeyRef.current, data);
-          const parsed = JSON.parse(plain) as unknown;
+          const plain = await decryptBytes(cryptoKeyRef.current, data);
+          if (operationId !== operationIdRef.current || rtcRef.current !== manager) return;
+          const fileFrame = decodeFileFrame(plain);
+          if (fileFrame !== null) {
+            onFileFrameRef.current?.(fileFrame);
+            return;
+          }
+          const parsed = JSON.parse(new TextDecoder().decode(plain)) as unknown;
 
           if (
             parsed &&
             typeof parsed === "object" &&
             (parsed as { type?: unknown }).type === "ping"
           ) {
+            return;
+          }
+
+          // Route file frames to the external handler
+          if (isFileFrame(parsed)) {
+            onFileFrameRef.current?.(parsed);
             return;
           }
 
@@ -621,6 +654,7 @@ export function useSession(): UseSessionResult {
         } catch {
           console.warn("Discarded unreadable encrypted message");
         }
+        });
       },
       onStateChange: (channelState: RTCDataChannelState) => {
         if (operationId !== operationIdRef.current || rtcRef.current !== manager) return;
@@ -833,8 +867,9 @@ export function useSession(): UseSessionResult {
     initialText: string,
     deviceName: string,
     deviceId: string,
+    allowEmpty = false,
   ): Promise<SessionActionResult> {
-    const validationError = validateText(initialText);
+    const validationError = allowEmpty && !initialText.trim() ? null : validateText(initialText);
     if (validationError) {
       dispatch({ type: "ERROR", error: validationError });
       return { ok: false, error: validationError };
@@ -1025,6 +1060,33 @@ export function useSession(): UseSessionResult {
     dispatch({ type: "CLEAR_ERROR" });
   }
 
+  function setFileFrameHandler(handler: ((frame: unknown) => void) | null) {
+    onFileFrameRef.current = handler;
+  }
+
+  function getFileTransport(): FileTransport | null {
+    const manager = rtcRef.current;
+    const key = cryptoKeyRef.current;
+    const operationId = operationIdRef.current;
+    if (!manager || !key || dataChannelStateRef.current !== "open") return null;
+    if (fileTransportRef.current?.manager === manager) return fileTransportRef.current.transport;
+    const transport: FileTransport = {
+      chunkSize: Math.min(CHUNK_SIZE, manager.maxMessageSize - FRAME_OVERHEAD),
+      send: async (frame, signal) => {
+        if (signal.aborted || rtcRef.current !== manager || operationId !== operationIdRef.current) return false;
+        try {
+          const bytes = await encryptBytes(key, encodeFileFrame(frame));
+          if (signal.aborted || rtcRef.current !== manager || operationId !== operationIdRef.current) return false;
+          return await manager.sendBuffered(bytes, signal);
+        } catch {
+          return false;
+        }
+      },
+    };
+    fileTransportRef.current = { manager, transport };
+    return transport;
+  }
+
   useEffect(() => {
     writeStoredSession(store);
   }, [store]);
@@ -1069,5 +1131,7 @@ export function useSession(): UseSessionResult {
     disconnect,
     reset,
     clearError,
+    setFileFrameHandler,
+    getFileTransport,
   };
 }
