@@ -6,9 +6,9 @@ import { describe, it, expect } from "vitest";
 import { buildJoinURL, parseJoinURL } from "./qr";
 
 describe("buildJoinURL", () => {
-  it("returns a string starting with https://kleepee.app/j/", () => {
+  it("returns a string starting with https://kleepee.adelekecode.dev/j/", () => {
     const url = buildJoinURL("abc123", "mysecret");
-    expect(url.startsWith("https://kleepee.app/j/")).toBe(true);
+    expect(url.startsWith("https://kleepee.adelekecode.dev/j/")).toBe(true);
   });
 
   it("places the sessionId in the path", () => {
@@ -36,7 +36,7 @@ describe("buildJoinURL", () => {
 
 describe("parseJoinURL", () => {
   it("extracts the sessionId from the path", () => {
-    const { sessionId } = parseJoinURL("https://kleepee.app/j/SESSION123#SECRET");
+    const { sessionId } = parseJoinURL("https://kleepee.adelekecode.dev/j/SESSION123#SECRET");
     expect(sessionId).toBe("SESSION123");
   });
 

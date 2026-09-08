@@ -9,10 +9,18 @@ class_name = "SessionDurableObject"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["SessionDurableObject"]
+new_sqlite_classes = ["SessionDurableObject"]
 
 [env.production]
 name = "kleepee-v1-production"
 routes = [
-  { pattern = "kleepee.app/api/*", zone_name = "kleepee.app" }
+  { pattern = "kleepee-worker.adelekecode.dev/*", zone_name = "adelekecode.dev" }
 ]
+
+[[env.production.durable_objects.bindings]]
+name = "SESSION_DO"
+class_name = "SessionDurableObject"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionDurableObject"]

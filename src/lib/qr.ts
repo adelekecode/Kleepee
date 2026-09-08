@@ -1,6 +1,6 @@
 import QRCode from "qrcode";
 
-const DEFAULT_JOIN_ORIGIN = "https://kleepee.app";
+const DEFAULT_JOIN_ORIGIN = "https://kleepee.adelekecode.dev";
 
 export function getJoinOrigin(): string {
   if (typeof import.meta.env !== "undefined" && import.meta.env.VITE_JOIN_ORIGIN) {

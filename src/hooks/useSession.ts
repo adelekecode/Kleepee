@@ -6,7 +6,7 @@ import type { ClientMessage, ServerMessage, SessionState, TextItem } from "../ty
 const WORKER_BASE =
   typeof import.meta.env !== "undefined" && import.meta.env.VITE_WORKER_URL
     ? (import.meta.env.VITE_WORKER_URL as string)
-    : "https://kleepee-v1.workers.dev";
+    : "https://kleepee-worker.adelekecode.dev";
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
