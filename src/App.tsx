@@ -7,7 +7,7 @@ import { JoinPage } from "./pages/JoinPage";
 import { WaitingPage } from "./pages/WaitingPage";
 
 function AppFrame() {
-  const { device } = useSessionContext();
+  const { device, hardResetApp } = useSessionContext();
 
   return (
     <div className="app-shell">
@@ -29,6 +29,12 @@ function AppFrame() {
           <Route path="/expired" element={<ExpiredPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+
+        <footer className="app-footer">
+          <button className="btn-reset" type="button" onClick={hardResetApp}>
+            Reset app
+          </button>
+        </footer>
       </div>
     </div>
   );

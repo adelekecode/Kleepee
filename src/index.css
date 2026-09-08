@@ -65,6 +65,10 @@
     @apply flex items-center justify-between gap-3;
   }
 
+  .app-footer {
+    @apply mt-auto flex justify-center pb-1 pt-2;
+  }
+
   .device-badge {
     @apply max-w-[55vw] truncate rounded-full border border-kleepee-border bg-kleepee-surface px-3 py-1.5 text-xs font-medium text-kleepee-muted shadow-sm;
   }
@@ -83,6 +87,10 @@
 
   .btn-danger {
     @apply inline-flex min-h-9 items-center justify-center rounded-full border border-kleepee-danger/25 bg-kleepee-surface px-3.5 py-2 text-sm font-medium text-kleepee-danger transition duration-200 ease-out hover:bg-kleepee-danger/10 focus:outline-none focus:ring-2 focus:ring-kleepee-danger/40 focus:ring-offset-2 focus:ring-offset-kleepee-bg;
+  }
+
+  .btn-reset {
+    @apply inline-flex min-h-9 items-center justify-center rounded-full border border-kleepee-border bg-transparent px-3.5 py-2 text-sm font-medium text-kleepee-muted transition duration-200 ease-out hover:border-kleepee-danger/30 hover:bg-kleepee-danger/10 hover:text-kleepee-danger focus:outline-none focus:ring-2 focus:ring-kleepee-danger/40 focus:ring-offset-2 focus:ring-offset-kleepee-bg;
   }
 
   .input-field {

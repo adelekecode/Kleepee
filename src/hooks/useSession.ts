@@ -18,6 +18,7 @@ const BACKOFF_DELAYS = [2000, 4000, 8000, 15000];
 const MAX_BYTES = 65536;
 const SESSION_STORAGE_KEY = "kleepee.session.current";
 const HEARTBEAT_INTERVAL_MS = 25 * 1000;
+const JOIN_OFFER_TIMEOUT_MS = 15 * 1000;
 
 export type SessionErrorCode =
   | "blank"
@@ -374,6 +375,7 @@ export function useSession(): UseSessionResult {
   const intentionalCloseRef = useRef(false);
   const resumedRef = useRef(false);
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const joinOfferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function restoreRefs(stored: StoredSession, deviceName: string, deviceId: string) {
     deviceNameRef.current = deviceName;
@@ -399,6 +401,13 @@ export function useSession(): UseSessionResult {
     }
   }
 
+  function clearJoinOfferTimer() {
+    if (joinOfferTimerRef.current) {
+      clearTimeout(joinOfferTimerRef.current);
+      joinOfferTimerRef.current = null;
+    }
+  }
+
   function startHeartbeat() {
     clearHeartbeatTimer();
 
@@ -421,6 +430,7 @@ export function useSession(): UseSessionResult {
   function closeTransports(clearKey: boolean) {
     clearRetryTimer();
     clearHeartbeatTimer();
+    clearJoinOfferTimer();
 
     try {
       wsRef.current?.close();
@@ -508,6 +518,7 @@ export function useSession(): UseSessionResult {
 
     closeTransports(false);
     retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
       if (operationId !== operationIdRef.current || !sessionIdRef.current) return;
       setupWebRTC(operationId);
       openWebSocket(sessionIdRef.current, operationId);
@@ -552,6 +563,24 @@ export function useSession(): UseSessionResult {
         }
       }
     }, BACKOFF_DELAYS[attempt - 1] ?? BACKOFF_DELAYS[BACKOFF_DELAYS.length - 1]);
+  }
+
+  function startJoinOfferTimer(operationId: number, ws: WebSocket) {
+    clearJoinOfferTimer();
+    joinOfferTimerRef.current = setTimeout(() => {
+      joinOfferTimerRef.current = null;
+      if (
+        operationId !== operationIdRef.current ||
+        wsRef.current !== ws ||
+        roleRef.current !== "joiner" ||
+        dataChannelStateRef.current === "open" ||
+        intentionalCloseRef.current
+      ) {
+        return;
+      }
+
+      scheduleReconnect("network");
+    }, JOIN_OFFER_TIMEOUT_MS);
   }
 
   function setupWebRTC(operationId = operationIdRef.current): WebRTCManager {
@@ -639,6 +668,11 @@ export function useSession(): UseSessionResult {
     wsRef.current = ws;
 
     let messageQueue = Promise.resolve();
+    ws.onopen = () => {
+      if (operationId !== operationIdRef.current || wsRef.current !== ws) return;
+      if (roleRef.current === "joiner") startJoinOfferTimer(operationId, ws);
+    };
+
     ws.onmessage = (event: MessageEvent) => {
       // SDP operations are asynchronous; preserve wire order for SDP and ICE.
       messageQueue = messageQueue.then(() => handleMessage(event));
@@ -672,6 +706,7 @@ export function useSession(): UseSessionResult {
           }
           case "signal.offer": {
             if (roleRef.current === "joiner") {
+              clearJoinOfferTimer();
               clearRetryTimer();
               const rtc = rtcRef.current ?? setupWebRTC(operationId);
               dispatch({ type: "CONNECTING" });
@@ -693,6 +728,7 @@ export function useSession(): UseSessionResult {
           case "session.expired": {
             operationIdRef.current += 1;
             intentionalCloseRef.current = true;
+            clearJoinOfferTimer();
             dispatch({ type: "EXPIRED" });
             closeTransports(true);
             break;
@@ -700,6 +736,7 @@ export function useSession(): UseSessionResult {
           case "peer.leave": {
             clearRetryTimer();
             clearHeartbeatTimer();
+            clearJoinOfferTimer();
             rtcRef.current?.close();
             rtcRef.current = null;
             dataChannelStateRef.current = null;
@@ -715,11 +752,13 @@ export function useSession(): UseSessionResult {
 
     ws.onerror = () => {
       if (operationId !== operationIdRef.current || wsRef.current !== ws) return;
+      clearJoinOfferTimer();
       scheduleReconnect("network");
     };
 
     ws.onclose = (event: CloseEvent) => {
       if (operationId !== operationIdRef.current || wsRef.current !== ws || intentionalCloseRef.current) return;
+      clearJoinOfferTimer();
 
       if (event.code === 4410) {
         operationIdRef.current += 1;

@@ -50,7 +50,8 @@ describe("WebRTC connection recovery", () => {
   it("reports a stalled handshake after 15 seconds", async () => {
     await manager.createOffer();
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(onStateChange).toHaveBeenCalledExactlyOnceWith("closed");
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("closed");
   });
 
   it("reports ICE failure once even if the channel also errors", async () => {
@@ -60,7 +61,8 @@ describe("WebRTC connection recovery", () => {
     pc.oniceconnectionstatechange?.();
     pc.channel.onerror?.();
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(onStateChange).toHaveBeenCalledExactlyOnceWith("closed");
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("closed");
   });
 
   it("cancels the handshake deadline when the data channel opens", async () => {
@@ -69,7 +71,8 @@ describe("WebRTC connection recovery", () => {
     pc.channel.readyState = "open";
     pc.channel.onopen?.();
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(onStateChange).toHaveBeenCalledExactlyOnceWith("open");
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("open");
   });
 
   it("allows a briefly disconnected connection to recover", async () => {
@@ -83,7 +86,8 @@ describe("WebRTC connection recovery", () => {
     pc.connectionState = "connected";
     pc.onconnectionstatechange?.();
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(onStateChange).toHaveBeenCalledExactlyOnceWith("open");
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("open");
   });
 
   it("closes replaced connections without triggering a reconnect loop", async () => {

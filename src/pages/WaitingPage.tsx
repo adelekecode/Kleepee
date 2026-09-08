@@ -1,12 +1,24 @@
 import { useEffect, useMemo } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { QRCode } from "../components/QRCode";
+import { StatusBar } from "../components/StatusBar";
 import { buildJoinURL } from "../lib/qr";
 import { useSessionContext } from "../context/SessionContext";
 
 export function WaitingPage() {
   const navigate = useNavigate();
-  const { sessionId, sessionSecret, state, initialText, reset } = useSessionContext();
+  const {
+    sessionId,
+    sessionSecret,
+    state,
+    initialText,
+    reset,
+    peerDeviceName,
+    dataChannelState,
+    retryAttempt,
+    maxRetries,
+    terminalReason,
+  } = useSessionContext();
   const joinUrl = useMemo(() => {
     if (!sessionId || !sessionSecret) return "";
     return buildJoinURL(sessionId, sessionSecret);
@@ -40,6 +52,19 @@ export function WaitingPage() {
             Scan this code with the other device camera.
           </p>
         </div>
+
+        {(state === "CONNECTING" || state === "DISCONNECTED") && (
+          <div className="flex justify-center">
+            <StatusBar
+              state={state}
+              peerDeviceName={peerDeviceName}
+              dataChannelState={dataChannelState}
+              retryAttempt={retryAttempt}
+              maxRetries={maxRetries}
+              terminalReason={terminalReason}
+            />
+          </div>
+        )}
 
         <QRCode url={joinUrl} />
 

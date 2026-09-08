@@ -9,7 +9,7 @@ const SECRET_PATTERN = /^[A-Za-z0-9_-]+$/;
 export function JoinPage() {
   const navigate = useNavigate();
   const { sessionId = "" } = useParams();
-  const { device, joinSession, state, reset, error } = useSessionContext();
+  const { device, joinSession, state, reset, error, retryAttempt } = useSessionContext();
   const [joinError, setJoinError] = useState<SessionError | null>(null);
   const joinSessionRef = useRef(joinSession);
   joinSessionRef.current = joinSession;
@@ -63,13 +63,19 @@ export function JoinPage() {
     return <Navigate to="/connected" replace />;
   }
 
+  const isReconnecting = state === "DISCONNECTED" && retryAttempt > 0;
+  const title = isReconnecting ? "Reconnecting securely..." : "Connecting securely...";
+  const detail = isReconnecting
+    ? `Still waiting for the first device to respond. Retry ${retryAttempt} is running.`
+    : "Keep this tab open while Kleepee links both devices.";
+
   return (
     <main className="fade-in flex flex-1 flex-col justify-center py-8">
       <section className="panel flex min-h-[320px] flex-col items-center justify-center gap-4 text-center">
         <div className="spinner" />
-        <h1 className="text-2xl font-semibold text-kleepee-espresso">Connecting securely...</h1>
+        <h1 className="text-2xl font-semibold text-kleepee-espresso">{title}</h1>
         <p className="max-w-sm text-sm leading-6 text-kleepee-muted">
-          Keep this tab open while Kleepee links both devices.
+          {detail}
         </p>
       </section>
     </main>

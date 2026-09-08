@@ -79,6 +79,15 @@ export function generateDeviceName(): string {
 const STORAGE_KEY_ID = "kleepee.device.id";
 const STORAGE_KEY_NAME = "kleepee.device.name";
 
+export function clearStoredIdentity(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY_ID);
+    localStorage.removeItem(STORAGE_KEY_NAME);
+  } catch {
+    /* localStorage may be unavailable */
+  }
+}
+
 /**
  * Reads the device identity from localStorage. If either value is missing,
  * generates a new id (via `crypto.randomUUID()`) and name (via

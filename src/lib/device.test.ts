@@ -3,7 +3,7 @@
  * Requirements: 1.1, 1.2, 1.3
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { generateDeviceName, loadOrCreateIdentity } from "./device";
+import { clearStoredIdentity, generateDeviceName, loadOrCreateIdentity } from "./device";
 
 describe("generateDeviceName", () => {
   it("returns a string with exactly two words", () => {
@@ -70,5 +70,13 @@ describe("loadOrCreateIdentity", () => {
   it("deviceName has two words (Req 1.2)", () => {
     const { deviceName } = loadOrCreateIdentity();
     expect(deviceName.trim().split(" ")).toHaveLength(2);
+  });
+
+  it("clears the stored identity for a hard reset", () => {
+    localStorage.setItem("kleepee.device.id", "test-id");
+    localStorage.setItem("kleepee.device.name", "Test Name");
+    clearStoredIdentity();
+    expect(localStorage.getItem("kleepee.device.id")).toBeNull();
+    expect(localStorage.getItem("kleepee.device.name")).toBeNull();
   });
 });
