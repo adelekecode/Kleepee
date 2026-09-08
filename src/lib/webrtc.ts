@@ -28,6 +28,7 @@ export class WebRTCManager {
     this.startConnectionTimer();
 
     pc.onconnectionstatechange = () => {
+      if (import.meta.env.DEV) console.debug("Kleepee peer state", pc.connectionState);
       if (pc !== this.pc) return;
       if (pc.connectionState === "failed") this.reportFailure();
       if (pc.connectionState === "disconnected") this.startConnectionTimer();
@@ -36,10 +37,12 @@ export class WebRTCManager {
       }
     };
     pc.oniceconnectionstatechange = () => {
+      if (import.meta.env.DEV) console.debug("Kleepee ICE state", pc.iceConnectionState);
       if (pc === this.pc && pc.iceConnectionState === "failed") this.reportFailure();
     };
 
     pc.onicecandidate = (event) => {
+      if (import.meta.env.DEV) console.debug("Kleepee ICE candidate", event.candidate?.type ?? "complete");
       if (event.candidate) {
         this.callbacks.onIceCandidate(event.candidate);
       }
@@ -59,6 +62,16 @@ export class WebRTCManager {
   }
 
   private reportFailure(): void {
+    if (import.meta.env.DEV) {
+      void this.pc?.getStats().then((stats) => {
+        const summary: unknown[] = [];
+        stats.forEach((stat) => {
+          if (stat.type === "candidate-pair") summary.push({ type: stat.type, state: stat.state, requestsSent: stat.requestsSent, responsesReceived: stat.responsesReceived });
+          if (stat.type === "local-candidate" || stat.type === "remote-candidate") summary.push({ type: stat.type, candidateType: stat.candidateType, protocol: stat.protocol });
+        });
+        console.debug("Kleepee connection failure", JSON.stringify(summary));
+      });
+    }
     this.clearConnectionTimer();
     if (this.failureReported) return;
     this.failureReported = true;

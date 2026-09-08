@@ -526,6 +526,7 @@ export function useSession(): UseSessionResult {
   }
 
   function sendSignal(message: ClientMessage) {
+    if (import.meta.env.DEV) console.debug("Kleepee signal send", roleRef.current, message.type, wsRef.current?.readyState);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     }
@@ -689,6 +690,7 @@ export function useSession(): UseSessionResult {
       }
 
       try {
+        if (import.meta.env.DEV) console.debug("Kleepee signal receive", roleRef.current, message.type);
         switch (message.type) {
           case "peer.join": {
             clearRetryTimer();
@@ -745,7 +747,8 @@ export function useSession(): UseSessionResult {
             break;
           }
         }
-      } catch {
+      } catch (error) {
+        console.warn("Kleepee signaling failed", error);
         if (operationId === operationIdRef.current) scheduleRTCReconnect();
       }
     }
