@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef } from "react";
 import { WebRTCManager } from "../lib/webrtc";
 import { createIceServerLoader } from "../lib/iceServers";
 import { deriveKey, encrypt, decrypt, generateSessionSecret } from "../lib/crypto";
+import { recordSession } from "../lib/sessionHistory";
 import type { ClientMessage, ServerMessage, SessionState, TextItem } from "../types";
 
 const WORKER_BASE =
@@ -373,6 +374,11 @@ export function useSession(): UseSessionResult {
   const resumedRef = useRef(false);
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const joinOfferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionStartedAtRef = useRef<number | null>(null);
+  // Ref to always have the latest store snapshot for history recording without
+  // creating stale closures inside imperative functions.
+  const storeRef = useRef(store);
+  storeRef.current = store;
 
   function restoreRefs(stored: StoredSession, deviceName: string, deviceId: string) {
     deviceNameRef.current = deviceName;
@@ -624,6 +630,7 @@ export function useSession(): UseSessionResult {
 
         if (channelState === "open") {
           retryCountRef.current = 0;
+          sessionStartedAtRef.current = sessionStartedAtRef.current ?? Date.now();
           startHeartbeat();
           dispatch({ type: "CONNECTED" });
 
@@ -734,6 +741,7 @@ export function useSession(): UseSessionResult {
             operationIdRef.current += 1;
             intentionalCloseRef.current = true;
             clearJoinOfferTimer();
+            saveToHistory();
             dispatch({ type: "EXPIRED" });
             closeTransports(true);
             break;
@@ -768,6 +776,7 @@ export function useSession(): UseSessionResult {
 
       if (event.code === 4410) {
         operationIdRef.current += 1;
+        saveToHistory();
         dispatch({ type: "EXPIRED" });
         closeTransports(true);
         return;
@@ -861,6 +870,7 @@ export function useSession(): UseSessionResult {
       sessionIdRef.current = sessionId;
       sessionSecretRef.current = sessionSecret;
       roleRef.current = "initiator";
+      sessionStartedAtRef.current = null;
 
       dispatch({ type: "SESSION_CREATED", sessionId, sessionSecret, initialText });
       setupWebRTC(operationId);
@@ -898,6 +908,7 @@ export function useSession(): UseSessionResult {
     sessionIdRef.current = sessionId;
     sessionSecretRef.current = sessionSecret;
     roleRef.current = "joiner";
+    sessionStartedAtRef.current = null;
     dispatch({ type: "SESSION_JOINED", sessionId, sessionSecret });
     dispatch({ type: "PENDING", isPending: true });
 
@@ -965,7 +976,27 @@ export function useSession(): UseSessionResult {
     }
   }
 
+  function saveToHistory() {
+    const s = storeRef.current;
+    if (
+      s.sessionId &&
+      s.sessionSecret &&
+      s.role &&
+      sessionStartedAtRef.current !== null
+    ) {
+      recordSession(
+        s.sessionId,
+        s.sessionSecret,
+        s.role,
+        s.peerDeviceName,
+        s.items,
+        sessionStartedAtRef.current,
+      );
+    }
+  }
+
   function disconnect() {
+    saveToHistory();
     operationIdRef.current += 1;
     intentionalCloseRef.current = true;
     closeTransports(true);
@@ -974,6 +1005,7 @@ export function useSession(): UseSessionResult {
   }
 
   function reset() {
+    saveToHistory();
     operationIdRef.current += 1;
     intentionalCloseRef.current = true;
     closeTransports(true);

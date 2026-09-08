@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { StatusBar } from "../components/StatusBar";
 import { TextFeed } from "../components/TextFeed";
 import { TextInput } from "../components/TextInput";
 import { useSessionContext } from "../context/SessionContext";
+import { useNotifications } from "../hooks/useNotifications";
 
 export function ConnectedPage() {
   const navigate = useNavigate();
@@ -23,6 +24,18 @@ export function ConnectedPage() {
     disconnect,
     reset,
   } = useSessionContext();
+
+  const { permission, soundEnabled, requestPermission, notify, toggleSound } = useNotifications();
+  const prevItemCountRef = useRef(items.length);
+
+  // Fire notification whenever a new item arrives
+  useEffect(() => {
+    if (items.length > prevItemCountRef.current) {
+      const latest = items[items.length - 1];
+      notify(latest, device.deviceId);
+    }
+    prevItemCountRef.current = items.length;
+  }, [items, device.deviceId, notify]);
 
   useEffect(() => {
     if (state === "EXPIRED") {
@@ -74,6 +87,23 @@ export function ConnectedPage() {
           </button>
         ) : (
           <div className="flex flex-wrap gap-2">
+            {/* Notification controls */}
+            {permission !== "denied" && (
+              <button
+                className="btn-secondary"
+                type="button"
+                title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
+                aria-label={soundEnabled ? "Mute notification sounds" : "Unmute notification sounds"}
+                onClick={toggleSound}
+              >
+                {soundEnabled ? "🔔" : "🔕"}
+              </button>
+            )}
+            {permission === "default" && (
+              <button className="btn-secondary" type="button" onClick={requestPermission}>
+                Enable notifications
+              </button>
+            )}
             <button className="btn-secondary" type="button" onClick={openNewSession}>
               New session
             </button>

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { TextInput } from "../components/TextInput";
+import { RecentSessions } from "../components/RecentSessions";
 import { useSessionContext } from "../context/SessionContext";
 import { parseJoinURL } from "../lib/qr";
 
@@ -42,7 +43,6 @@ export function HomePage() {
     <main className="fade-in flex flex-1 flex-col justify-center gap-6 py-8">
       <section className="flex items-start justify-between gap-4">
         <div className="space-y-3">
-          <p className="text-sm font-medium text-kleepee-accent">Kleepee</p>
           <h1 className="max-w-[12ch] text-4xl font-semibold leading-tight text-kleepee-espresso sm:text-5xl">
             Text, from here to there.
           </h1>
@@ -107,6 +107,8 @@ export function HomePage() {
           Start over
         </button>
       )}
+
+      <RecentSessions onResume={() => reset()} />
     </main>
   );
 }
