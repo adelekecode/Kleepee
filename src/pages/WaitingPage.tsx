@@ -4,7 +4,7 @@ import { QRCode } from "../components/QRCode";
 import { StatusBar } from "../components/StatusBar";
 import { buildJoinURL } from "../lib/qr";
 import { useSessionContext } from "../context/SessionContext";
-import { getNotificationPermission, requestNotificationPermission } from "../lib/notifications";
+import { getNotificationPermission, requestNotificationPermission, systemNotificationsSupported } from "../lib/notifications";
 
 export function WaitingPage() {
   const navigate = useNavigate();
@@ -95,7 +95,7 @@ export function WaitingPage() {
           Cancel
         </button>
 
-        {notifPermission === "default" && (
+        {systemNotificationsSupported() && notifPermission === "default" && (
           <button
             className="self-center text-xs text-kleepee-muted underline underline-offset-2 hover:text-kleepee-espresso focus:outline-none"
             type="button"

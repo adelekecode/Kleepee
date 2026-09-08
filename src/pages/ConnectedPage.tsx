@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { StatusBar } from "../components/StatusBar";
 import { TextFeed } from "../components/TextFeed";
 import { TextInput } from "../components/TextInput";
+import { MessageToast } from "../components/MessageToast";
 import { useSessionContext } from "../context/SessionContext";
 import { useNotifications } from "../hooks/useNotifications";
 
@@ -25,7 +26,7 @@ export function ConnectedPage() {
     reset,
   } = useSessionContext();
 
-  const { permission, soundEnabled, requestPermission, notify, toggleSound } = useNotifications();
+  const { permission, soundEnabled, systemSupported, toast, requestPermission, notify, dismissToast, toggleSound, unlockAudio } = useNotifications();
   const prevItemCountRef = useRef(items.length);
 
   // Fire notification whenever a new item arrives
@@ -56,6 +57,7 @@ export function ConnectedPage() {
   const exhausted = state === "DISCONNECTED" && terminalReason === "retries_exhausted";
 
   async function handleSend(text: string) {
+    unlockAudio(); // unlock AudioContext on this user gesture for mobile
     const result = await sendText(text, device.deviceName, device.deviceId);
     return result.ok;
   }
@@ -71,6 +73,7 @@ export function ConnectedPage() {
 
   return (
     <main className="fade-in flex min-h-0 flex-1 flex-col gap-4 pb-2">
+      {toast && <MessageToast toast={toast} onDismiss={dismissToast} />}
       <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <StatusBar
           state={state}
@@ -87,19 +90,17 @@ export function ConnectedPage() {
           </button>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {/* Notification controls */}
-            {permission !== "denied" && (
-              <button
-                className="btn-secondary"
-                type="button"
-                title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
-                aria-label={soundEnabled ? "Mute notification sounds" : "Unmute notification sounds"}
-                onClick={toggleSound}
-              >
-                {soundEnabled ? "🔔" : "🔕"}
-              </button>
-            )}
-            {permission === "default" && (
+            {/* Notification controls — sound toggle always shown, system notif only where supported */}
+            <button
+              className="btn-secondary"
+              type="button"
+              title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
+              aria-label={soundEnabled ? "Mute notification sounds" : "Unmute notification sounds"}
+              onClick={toggleSound}
+            >
+              {soundEnabled ? "🔔" : "🔕"}
+            </button>
+            {systemSupported && permission === "default" && (
               <button className="btn-secondary" type="button" onClick={requestPermission}>
                 Enable notifications
               </button>
