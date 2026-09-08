@@ -47,9 +47,11 @@ export class SessionDurableObject implements DurableObject {
     }
 
     if (request.method === "GET") {
+      const deviceId = new URL(request.url).searchParams.get("deviceId") || "";
       return this.json({
         sessionState: this.sessionState,
         deviceCount: this.peers.size,
+        canJoin: this.peers.size < 2 || this.findPeerByDeviceId(deviceId) !== null,
       });
     }
 
@@ -77,18 +79,23 @@ export class SessionDurableObject implements DurableObject {
     }
 
     const sender = this.getAttachment(ws);
-    const otherPeer = this.findOtherPeer(sender?.peerId ?? null);
+    if (!sender || this.peers.get(sender.peerId)?.ws !== ws) return;
+
+    const otherPeer = this.findOtherPeer(sender.peerId);
     otherPeer?.send(wireMessage);
   }
 
-  webSocketClose(ws: WebSocket): void {
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    // Complete the close handshake before rebuilding the active peer list.
+    if (ws.readyState === WebSocket.CLOSING) ws.close();
     this.restorePeers();
 
     const attachment = this.getAttachment(ws);
     if (!attachment) return;
 
-    const currentPeer = this.peers.get(attachment.peerId);
-    if (currentPeer?.ws !== ws) return;
+    // A replacement socket for this device must not look like a departure.
+    const replacementPeer = this.findPeerByDeviceId(attachment.deviceId);
+    if (replacementPeer && replacementPeer.attachment.peerId !== attachment.peerId) return;
 
     this.peers.delete(attachment.peerId);
 
@@ -100,7 +107,7 @@ export class SessionDurableObject implements DurableObject {
       }
     }
 
-    void this.updateStateAfterClose();
+    await this.updateStateAfterClose();
   }
 
   async alarm(): Promise<void> {
@@ -217,6 +224,7 @@ export class SessionDurableObject implements DurableObject {
     const restoredPeers = new Map<string, PeerRecord>();
 
     for (const ws of this.ctx.getWebSockets()) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
       const attachment = this.getAttachment(ws);
       if (!attachment) continue;
       restoredPeers.set(attachment.peerId, { ws, attachment });

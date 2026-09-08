@@ -150,6 +150,8 @@ function clearStoredSession(): void {
 }
 
 function getInitialStore(): SessionStore {
+  // An explicit join link takes precedence over this tab's previous session.
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/j/")) return emptyStore;
   const stored = readStoredSession();
   if (!stored) return emptyStore;
 
@@ -301,6 +303,10 @@ export interface UseSessionResult {
 
 function makeError(code: SessionErrorCode, message: string, status?: number): SessionError {
   return { code, message, status };
+}
+
+function cancelledOperation(): SessionActionResult {
+  return { ok: false, error: makeError("connection_failed", "Session changed before connecting.") };
 }
 
 function validateText(text: string): SessionError | null {
@@ -514,12 +520,46 @@ export function useSession(): UseSessionResult {
     }
   }
 
+  function scheduleRTCReconnect() {
+    if (intentionalCloseRef.current || retryTimerRef.current) return;
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      scheduleReconnect("network");
+      return;
+    }
+
+    // Keep signaling attached while rebuilding the direct connection. Closing
+    // both sockets here makes each peer's departure restart the other peer.
+    clearHeartbeatTimer();
+    rtcRef.current?.close();
+    rtcRef.current = null;
+    dataChannelStateRef.current = null;
+    const attempt = ++retryCountRef.current;
+    const operationId = operationIdRef.current;
+    dispatch({ type: "CHANNEL_STATE", dataChannelState: null });
+    dispatch({ type: "RECONNECTING", retryAttempt: attempt, reason: "network" });
+    retryTimerRef.current = setTimeout(async () => {
+      retryTimerRef.current = null;
+      if (operationId !== operationIdRef.current || intentionalCloseRef.current) return;
+      const rtc = setupWebRTC(operationId);
+      if (roleRef.current === "initiator") {
+        try {
+          const offer = await rtc.createOffer();
+          if (rtcRef.current === rtc && operationId === operationIdRef.current) {
+            sendSignal({ type: "signal.offer", offer });
+          }
+        } catch {
+          if (rtcRef.current === rtc) scheduleRTCReconnect();
+        }
+      }
+    }, BACKOFF_DELAYS[attempt - 1] ?? BACKOFF_DELAYS[BACKOFF_DELAYS.length - 1]);
+  }
+
   function setupWebRTC(operationId = operationIdRef.current): WebRTCManager {
     rtcRef.current?.close();
 
     const manager = new WebRTCManager(ICE_SERVERS, {
       onMessage: async (data: Uint8Array) => {
-        if (operationId !== operationIdRef.current || !cryptoKeyRef.current) return;
+        if (operationId !== operationIdRef.current || rtcRef.current !== manager || !cryptoKeyRef.current) return;
 
         try {
           const plain = await decrypt(cryptoKeyRef.current, data);
@@ -543,7 +583,7 @@ export function useSession(): UseSessionResult {
         }
       },
       onStateChange: (channelState: RTCDataChannelState) => {
-        if (operationId !== operationIdRef.current) return;
+        if (operationId !== operationIdRef.current || rtcRef.current !== manager) return;
 
         dataChannelStateRef.current = channelState;
         dispatch({ type: "CHANNEL_STATE", dataChannelState: channelState });
@@ -566,11 +606,11 @@ export function useSession(): UseSessionResult {
 
         if (channelState === "closed") {
           clearHeartbeatTimer();
-          scheduleReconnect("network");
+          scheduleRTCReconnect();
         }
       },
       onIceCandidate: (candidate: RTCIceCandidate) => {
-        if (operationId !== operationIdRef.current) return;
+        if (operationId !== operationIdRef.current || rtcRef.current !== manager) return;
         sendSignal({ type: "signal.ice", candidate: candidate.toJSON() });
       },
       onOffer: () => {
@@ -598,7 +638,13 @@ export function useSession(): UseSessionResult {
     const ws = new WebSocket(`${wsBase}/sessions/${encodeURIComponent(sessionId)}/ws?deviceName=${deviceName}&deviceId=${deviceId}`);
     wsRef.current = ws;
 
-    ws.onmessage = async (event: MessageEvent) => {
+    let messageQueue = Promise.resolve();
+    ws.onmessage = (event: MessageEvent) => {
+      // SDP operations are asynchronous; preserve wire order for SDP and ICE.
+      messageQueue = messageQueue.then(() => handleMessage(event));
+    };
+
+    async function handleMessage(event: MessageEvent) {
       if (operationId !== operationIdRef.current || wsRef.current !== ws) return;
 
       let message: ServerMessage;
@@ -608,34 +654,40 @@ export function useSession(): UseSessionResult {
         return;
       }
 
-      const rtc = rtcRef.current ?? setupWebRTC(operationId);
-
       try {
         switch (message.type) {
           case "peer.join": {
+            clearRetryTimer();
+            const rtc = setupWebRTC(operationId);
             dispatch({ type: "PEER_JOINED", peerDeviceName: message.deviceName });
             dispatch({ type: "CONNECTING" });
 
             if (roleRef.current === "initiator") {
               const offer = await rtc.createOffer();
-              sendSignal({ type: "signal.offer", offer });
+              if (rtcRef.current === rtc && operationId === operationIdRef.current) {
+                sendSignal({ type: "signal.offer", offer });
+              }
             }
             break;
           }
           case "signal.offer": {
             if (roleRef.current === "joiner") {
+              clearRetryTimer();
+              const rtc = rtcRef.current ?? setupWebRTC(operationId);
               dispatch({ type: "CONNECTING" });
               const answer = await rtc.handleOffer(message.offer);
-              sendSignal({ type: "signal.answer", answer });
+              if (rtcRef.current === rtc && operationId === operationIdRef.current) {
+                sendSignal({ type: "signal.answer", answer });
+              }
             }
             break;
           }
           case "signal.answer": {
-            await rtc.handleAnswer(message.answer);
+            await rtcRef.current?.handleAnswer(message.answer);
             break;
           }
           case "signal.ice": {
-            await rtc.addIceCandidate(message.candidate);
+            await (rtcRef.current ?? setupWebRTC(operationId)).addIceCandidate(message.candidate);
             break;
           }
           case "session.expired": {
@@ -646,14 +698,20 @@ export function useSession(): UseSessionResult {
             break;
           }
           case "peer.leave": {
-            scheduleReconnect("peer_left");
+            clearRetryTimer();
+            clearHeartbeatTimer();
+            rtcRef.current?.close();
+            rtcRef.current = null;
+            dataChannelStateRef.current = null;
+            dispatch({ type: "CHANNEL_STATE", dataChannelState: null });
+            dispatch({ type: "DISCONNECTED", reason: "peer_left" });
             break;
           }
         }
       } catch {
-        scheduleReconnect("network");
+        if (operationId === operationIdRef.current) scheduleRTCReconnect();
       }
-    };
+    }
 
     ws.onerror = () => {
       if (operationId !== operationIdRef.current || wsRef.current !== ws) return;
@@ -683,34 +741,31 @@ export function useSession(): UseSessionResult {
 
   async function checkJoinable(sessionId: string): Promise<SessionActionResult> {
     try {
-      const response = await fetch(`${WORKER_BASE}/sessions/${encodeURIComponent(sessionId)}`);
+      const response = await fetch(`${WORKER_BASE}/sessions/${encodeURIComponent(sessionId)}?deviceId=${encodeURIComponent(deviceIdRef.current)}`);
 
       if (!response.ok) {
         const error = mapJoinStatus(response.status);
-        dispatch({ type: "ERROR", error });
         return { ok: false, error };
       }
 
       const body = (await response.json().catch(() => null)) as {
         sessionState?: SessionState;
         deviceCount?: number;
+        canJoin?: boolean;
       } | null;
 
       if (body?.sessionState === "EXPIRED") {
         const error = makeError("session_expired", "This session has expired.", 410);
-        dispatch({ type: "ERROR", error });
         return { ok: false, error };
       }
 
-      if (typeof body?.deviceCount === "number" && body.deviceCount >= 2) {
+      if (body?.canJoin === false || (body?.canJoin !== true && typeof body?.deviceCount === "number" && body.deviceCount >= 2)) {
         const error = makeError("session_full", "This session already has two devices.", 409);
-        dispatch({ type: "ERROR", error });
         return { ok: false, error };
       }
 
       if (typeof body?.deviceCount === "number" && body.deviceCount === 0) {
         const error = makeError("session_not_found", "Session not found.", 404);
-        dispatch({ type: "ERROR", error });
         return { ok: false, error };
       }
 
@@ -754,7 +809,9 @@ export function useSession(): UseSessionResult {
 
       const { sessionId } = (await response.json()) as { sessionId: string };
       const sessionSecret = generateSessionSecret();
-      cryptoKeyRef.current = await deriveKey(sessionSecret);
+      const key = await deriveKey(sessionSecret);
+      if (operationId !== operationIdRef.current) return cancelledOperation();
+      cryptoKeyRef.current = key;
 
       sessionIdRef.current = sessionId;
       sessionSecretRef.current = sessionSecret;
@@ -800,13 +857,17 @@ export function useSession(): UseSessionResult {
     dispatch({ type: "PENDING", isPending: true });
 
     const joinable = await checkJoinable(sessionId);
+    if (operationId !== operationIdRef.current) return cancelledOperation();
     if (!joinable.ok) {
+      dispatch({ type: "ERROR", error: joinable.error });
       dispatch({ type: "DISCONNECTED", reason: "network" });
       return joinable;
     }
 
     try {
-      cryptoKeyRef.current = await deriveKey(sessionSecret);
+      const key = await deriveKey(sessionSecret);
+      if (operationId !== operationIdRef.current) return cancelledOperation();
+      cryptoKeyRef.current = key;
       setupWebRTC(operationId);
       openWebSocket(sessionId, operationId);
       return { ok: true };
@@ -827,7 +888,7 @@ export function useSession(): UseSessionResult {
   }
 
   async function resumeStoredSession(deviceName: string, deviceId: string): Promise<SessionActionResult> {
-    if (resumedRef.current || rtcRef.current || wsRef.current) {
+    if (window.location.pathname.startsWith("/j/") || resumedRef.current || sessionIdRef.current || rtcRef.current || wsRef.current) {
       return { ok: true };
     }
 
@@ -845,7 +906,9 @@ export function useSession(): UseSessionResult {
     dispatch({ type: "SESSION_RESTORED", stored });
 
     try {
-      cryptoKeyRef.current = await deriveKey(stored.sessionSecret);
+      const key = await deriveKey(stored.sessionSecret);
+      if (operationId !== operationIdRef.current) return cancelledOperation();
+      cryptoKeyRef.current = key;
       setupWebRTC(operationId);
       openWebSocket(stored.sessionId, operationId);
       return { ok: true };
@@ -889,10 +952,13 @@ export function useSession(): UseSessionResult {
   }, [store]);
 
   useEffect(() => {
+    intentionalCloseRef.current = false;
     return () => {
       operationIdRef.current += 1;
       intentionalCloseRef.current = true;
       closeTransports(true);
+      resumedRef.current = false;
+      sessionIdRef.current = null;
     };
   }, []);
 

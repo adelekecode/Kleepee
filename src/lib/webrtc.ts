@@ -13,6 +13,8 @@ export class WebRTCManager {
   private callbacks: WebRTCCallbacks;
   private iceServers: RTCIceServer[];
   private pendingIceCandidates: RTCIceCandidateInit[] = [];
+  private connectionTimer: ReturnType<typeof setTimeout> | null = null;
+  private failureReported = false;
 
   constructor(iceServers: RTCIceServer[], callbacks: WebRTCCallbacks) {
     this.iceServers = iceServers;
@@ -20,7 +22,22 @@ export class WebRTCManager {
   }
 
   private createPeerConnection(): RTCPeerConnection {
+    if (this.pc) this.close();
+    this.failureReported = false;
     const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.startConnectionTimer();
+
+    pc.onconnectionstatechange = () => {
+      if (pc !== this.pc) return;
+      if (pc.connectionState === "failed") this.reportFailure();
+      if (pc.connectionState === "disconnected") this.startConnectionTimer();
+      if (pc.connectionState === "connected" && this.dataChannel?.readyState === "open") {
+        this.clearConnectionTimer();
+      }
+    };
+    pc.oniceconnectionstatechange = () => {
+      if (pc === this.pc && pc.iceConnectionState === "failed") this.reportFailure();
+    };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -31,21 +48,39 @@ export class WebRTCManager {
     return pc;
   }
 
+  private clearConnectionTimer(): void {
+    if (this.connectionTimer !== null) clearTimeout(this.connectionTimer);
+    this.connectionTimer = null;
+  }
+
+  private startConnectionTimer(): void {
+    if (this.connectionTimer !== null) return;
+    this.connectionTimer = setTimeout(() => this.reportFailure(), 15_000);
+  }
+
+  private reportFailure(): void {
+    this.clearConnectionTimer();
+    if (this.failureReported) return;
+    this.failureReported = true;
+    this.callbacks.onStateChange("closed");
+  }
+
   private wireDataChannel(channel: RTCDataChannel): void {
     this.dataChannel = channel;
 
     channel.binaryType = "arraybuffer";
 
     channel.onopen = () => {
+      this.clearConnectionTimer();
       this.callbacks.onStateChange("open");
     };
 
     channel.onclose = () => {
-      this.callbacks.onStateChange("closed");
+      this.reportFailure();
     };
 
     channel.onerror = () => {
-      this.callbacks.onStateChange("closed");
+      this.reportFailure();
     };
 
     channel.onmessage = async (event: MessageEvent) => {
@@ -147,6 +182,20 @@ export class WebRTCManager {
    * Tear down both the DataChannel and PeerConnection.
    */
   close(): void {
+    this.clearConnectionTimer();
+    // Closing an old transport must not start another reconnect attempt.
+    if (this.dataChannel) {
+      this.dataChannel.onopen = null;
+      this.dataChannel.onclose = null;
+      this.dataChannel.onerror = null;
+      this.dataChannel.onmessage = null;
+    }
+    if (this.pc) {
+      this.pc.onicecandidate = null;
+      this.pc.onconnectionstatechange = null;
+      this.pc.oniceconnectionstatechange = null;
+      this.pc.ondatachannel = null;
+    }
     try {
       this.dataChannel?.close();
     } catch {

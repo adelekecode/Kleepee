@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import type { SessionError } from "../hooks/useSession";
 import { useSessionContext } from "../context/SessionContext";
 
@@ -11,8 +11,9 @@ export function JoinPage() {
   const { sessionId = "" } = useParams();
   const { device, joinSession, state, reset, error } = useSessionContext();
   const [joinError, setJoinError] = useState<SessionError | null>(null);
-  const startedRef = useRef(false);
-  const sessionSecret = useMemo(() => window.location.hash.slice(1), []);
+  const joinSessionRef = useRef(joinSession);
+  joinSessionRef.current = joinSession;
+  const sessionSecret = useLocation().hash.slice(1);
 
   const invalidLink =
     !sessionId ||
@@ -21,15 +22,17 @@ export function JoinPage() {
     !SECRET_PATTERN.test(sessionSecret);
 
   useEffect(() => {
-    if (invalidLink || startedRef.current) return;
+    if (invalidLink) return;
 
-    startedRef.current = true;
-    void joinSession(sessionId, sessionSecret, device.deviceName, device.deviceId).then((result) => {
-      if (!result.ok) {
+    let active = true;
+    setJoinError(null);
+    void joinSessionRef.current(sessionId, sessionSecret, device.deviceName, device.deviceId).then((result) => {
+      if (active && !result.ok) {
         setJoinError(result.error);
       }
     });
-  }, [device.deviceId, device.deviceName, invalidLink, joinSession, sessionId, sessionSecret]);
+    return () => { active = false; };
+  }, [device.deviceId, device.deviceName, invalidLink, sessionId, sessionSecret]);
 
   useEffect(() => {
     if (state === "CONNECTED") {
