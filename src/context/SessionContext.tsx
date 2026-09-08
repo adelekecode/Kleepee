@@ -46,7 +46,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return session.joinSession(...args);
   };
   function reset() { files.clear(); session.reset(); }
-  function disconnect() { files.connectionLost(); session.disconnect(); }
+  function disconnect() {
+    for (const id of files.getSnapshot().transfers.keys()) files.cancel(id);
+    files.connectionLost();
+    session.disconnect();
+  }
   function enqueueFiles(selected: File[]): FileSelectionResult {
     files.setTransport(session.getFileTransport());
     return files.enqueue(selected, device);

@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { SessionProvider, useSessionContext } from "./context/SessionContext";
 import { ConnectedPage } from "./pages/ConnectedPage";
 import { ExpiredPage } from "./pages/ExpiredPage";
@@ -13,9 +13,9 @@ function AppFrame() {
     <div className="app-shell">
       <div className="app-container">
         <header className="app-header" aria-label="Kleepee header">
-          <a className="text-lg font-semibold text-kleepee-espresso" href="/">
+          <Link className="rounded text-lg font-semibold text-kleepee-espresso focus:outline-none focus:ring-2 focus:ring-kleepee-focus" to="/">
             Kleepee
-          </a>
+          </Link>
           <div className="device-badge" title={device.deviceName}>
             {device.deviceName}
           </div>
