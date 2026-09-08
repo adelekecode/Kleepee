@@ -1,0 +1,42 @@
+{
+  "name": "kleepee-v1",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.26.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.5.29",
+    "@cloudflare/workers-types": "4.20241022.0",
+    "@types/node": "22.7.5",
+    "@types/qrcode": "1.5.5",
+    "@types/react": "18.3.11",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.2",
+    "@vitest/coverage-v8": "2.1.2",
+    "autoprefixer": "10.4.20",
+    "fast-check": "3.22.0",
+    "jsdom": "25.0.1",
+    "miniflare": "3.20241022.0",
+    "postcss": "8.4.47",
+    "tailwindcss": "3.4.13",
+    "typescript": "5.6.3",
+    "vite": "5.4.8",
+    "vitest": "2.1.2",
+    "wrangler": "3.80.0"
+  }
+}

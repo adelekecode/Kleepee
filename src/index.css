@@ -1,0 +1,123 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    min-width: 320px;
+    background: #f3ede3;
+    color: #352b24;
+    font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 16px;
+    letter-spacing: 0;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  textarea,
+  input {
+    font: inherit;
+  }
+
+  ::selection {
+    background: rgba(73, 111, 121, 0.22);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(117, 104, 91, 0.35);
+    border-radius: 999px;
+  }
+}
+
+@layer components {
+  .app-shell {
+    @apply min-h-screen bg-kleepee-bg px-4 py-5 text-kleepee-espresso sm:px-6 lg:py-8;
+  }
+
+  .app-container {
+    @apply mx-auto flex min-h-[calc(100vh-40px)] w-full max-w-[720px] flex-col gap-5;
+  }
+
+  .app-header {
+    @apply flex items-center justify-between gap-3;
+  }
+
+  .device-badge {
+    @apply max-w-[55vw] truncate rounded-full border border-kleepee-border bg-kleepee-surface px-3 py-1.5 text-xs font-medium text-kleepee-muted shadow-sm;
+  }
+
+  .panel {
+    @apply rounded-[24px] border border-kleepee-border bg-kleepee-surface p-5 shadow-kleepee sm:p-6;
+  }
+
+  .btn-primary {
+    @apply inline-flex min-h-11 items-center justify-center rounded-full bg-kleepee-espresso px-5 py-2.5 text-sm font-semibold text-white transition duration-200 ease-out hover:bg-kleepee-buttonHover focus:outline-none focus:ring-2 focus:ring-kleepee-focus focus:ring-offset-2 focus:ring-offset-kleepee-bg disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-9 items-center justify-center rounded-full border border-kleepee-border bg-kleepee-surface px-3.5 py-2 text-sm font-medium text-kleepee-espresso transition duration-200 ease-out hover:border-kleepee-muted/50 hover:bg-kleepee-panel focus:outline-none focus:ring-2 focus:ring-kleepee-focus focus:ring-offset-2 focus:ring-offset-kleepee-bg disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-danger {
+    @apply inline-flex min-h-9 items-center justify-center rounded-full border border-kleepee-danger/25 bg-kleepee-surface px-3.5 py-2 text-sm font-medium text-kleepee-danger transition duration-200 ease-out hover:bg-kleepee-danger/10 focus:outline-none focus:ring-2 focus:ring-kleepee-danger/40 focus:ring-offset-2 focus:ring-offset-kleepee-bg;
+  }
+
+  .input-field {
+    @apply w-full resize-none rounded-[18px] border border-kleepee-border bg-kleepee-surface p-4 text-base leading-7 text-kleepee-espresso outline-none transition duration-200 placeholder:text-kleepee-muted/65 focus:border-kleepee-focus focus:ring-2 focus:ring-kleepee-focus/20 disabled:cursor-not-allowed disabled:bg-kleepee-panel disabled:text-kleepee-muted;
+  }
+
+  .fade-in {
+    animation: fade-in 180ms ease-out;
+  }
+
+  .spinner {
+    @apply h-4 w-4 rounded-full border-2 border-kleepee-border border-t-kleepee-espresso;
+    animation: spin 800ms linear infinite;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
