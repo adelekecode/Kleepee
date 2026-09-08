@@ -978,11 +978,12 @@ export function useSession(): UseSessionResult {
 
   function saveToHistory() {
     const s = storeRef.current;
+    // Save any session that had a real sessionId and reached at least CONNECTING
     if (
       s.sessionId &&
       s.sessionSecret &&
       s.role &&
-      sessionStartedAtRef.current !== null
+      s.state !== "WAITING" // don't save sessions that never got a peer
     ) {
       recordSession(
         s.sessionId,
@@ -990,7 +991,7 @@ export function useSession(): UseSessionResult {
         s.role,
         s.peerDeviceName,
         s.items,
-        sessionStartedAtRef.current,
+        sessionStartedAtRef.current ?? Date.now(),
       );
     }
   }
@@ -1030,14 +1031,22 @@ export function useSession(): UseSessionResult {
 
   useEffect(() => {
     intentionalCloseRef.current = false;
+
+    function handleUnload() {
+      saveToHistory();
+    }
+    window.addEventListener("beforeunload", handleUnload);
+
     return () => {
+      window.removeEventListener("beforeunload", handleUnload);
+      saveToHistory();
       operationIdRef.current += 1;
       intentionalCloseRef.current = true;
       closeTransports(true);
       resumedRef.current = false;
       sessionIdRef.current = null;
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     state: store.state,

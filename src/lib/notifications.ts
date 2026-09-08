@@ -60,29 +60,8 @@ export function showMessageNotification(senderName: string, preview: string): vo
 // ---------------------------------------------------------------------------
 
 let audioCtx: AudioContext | null = null;
-let audioUnlocked = false;
 
-/**
- * Call this inside any user-gesture handler (click, keydown) to pre-unlock
- * the AudioContext. Mobile browsers suspend audio until a gesture occurs.
- */
-export function unlockAudio(): void {
-  if (audioUnlocked) return;
-  try {
-    if (!audioCtx || audioCtx.state === "closed") {
-      audioCtx = new AudioContext();
-    }
-    if (audioCtx.state === "suspended") {
-      void audioCtx.resume().then(() => { audioUnlocked = true; });
-    } else {
-      audioUnlocked = true;
-    }
-  } catch {
-    /* AudioContext not available */
-  }
-}
-
-function getAudioContext(): AudioContext | null {
+function getOrCreateContext(): AudioContext | null {
   try {
     if (!audioCtx || audioCtx.state === "closed") {
       audioCtx = new AudioContext();
@@ -93,8 +72,38 @@ function getAudioContext(): AudioContext | null {
   }
 }
 
+function playSilentBuffer(ctx: AudioContext): void {
+  // Playing a real (silent) buffer is the only reliable way to unlock
+  // AudioContext on iOS Safari and Android Chrome. A plain ctx.resume()
+  // is not enough — a buffer source must actually be started.
+  const buffer = ctx.createBuffer(1, 1, 22050);
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  source.start(0);
+}
+
+/**
+ * Call this inside a direct user-gesture handler (tap, click, keydown).
+ * Creates and unlocks the AudioContext so sounds can play later.
+ */
+export function unlockAudio(): void {
+  const ctx = getOrCreateContext();
+  if (!ctx) return;
+
+  const doUnlock = () => {
+    playSilentBuffer(ctx);
+  };
+
+  if (ctx.state === "suspended") {
+    void ctx.resume().then(doUnlock);
+  } else {
+    doUnlock();
+  }
+}
+
 export function playMessageSound(): void {
-  const ctx = getAudioContext();
+  const ctx = getOrCreateContext();
   if (!ctx) return;
 
   const play = () => {
@@ -116,6 +125,8 @@ export function playMessageSound(): void {
   };
 
   if (ctx.state === "suspended") {
+    // Context suspended — try to resume. On iOS this only works if called
+    // from within a gesture; otherwise it's a no-op and sound is skipped.
     void ctx.resume().then(play);
   } else {
     play();

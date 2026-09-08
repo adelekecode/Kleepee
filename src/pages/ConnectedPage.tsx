@@ -96,7 +96,10 @@ export function ConnectedPage() {
               type="button"
               title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
               aria-label={soundEnabled ? "Mute notification sounds" : "Unmute notification sounds"}
-              onClick={toggleSound}
+              onClick={() => {
+                unlockAudio(); // also a user gesture — unlock audio here on mobile
+                toggleSound();
+              }}
             >
               {soundEnabled ? "🔔" : "🔕"}
             </button>

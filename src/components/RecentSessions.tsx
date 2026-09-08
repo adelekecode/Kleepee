@@ -29,6 +29,14 @@ export function RecentSessions({ onResume }: RecentSessionsProps) {
 
   useEffect(() => {
     refresh();
+    // Re-read when the tab regains focus (e.g. after returning from another tab)
+    window.addEventListener("focus", refresh);
+    // Re-read when another tab writes to localStorage (cross-tab sync)
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("storage", refresh);
+    };
   }, [refresh]);
 
   if (entries.length === 0) return null;
