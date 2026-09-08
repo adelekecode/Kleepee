@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "VITE_WORKER_URL=http://127.0.0.1:8787 VITE_JOIN_ORIGIN=http://127.0.0.1:5173 vite --host 127.0.0.1 --port 5173",
+    "dev:worker": "wrangler dev --config wrangler.toml --ip 127.0.0.1 --port 8787",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest --run",

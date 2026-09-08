@@ -63,7 +63,8 @@ function generateSessionId(): string {
 
 async function handleFetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const { pathname, method } = url;
+  const pathname = normalizePath(url.pathname);
+  const { method } = request;
 
   // Preflight CORS
   if (method === "OPTIONS") {
@@ -106,11 +107,25 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
   return corsText("Not Found", 404);
 }
 
+function normalizePath(pathname: string): string {
+  const withoutTrailingSlash = pathname.replace(/\/+$/, "") || "/";
+
+  if (withoutTrailingSlash === "/api") {
+    return "/";
+  }
+
+  if (withoutTrailingSlash.startsWith("/api/")) {
+    return withoutTrailingSlash.slice(4) || "/";
+  }
+
+  return withoutTrailingSlash;
+}
+
 // ---------------------------------------------------------------------------
 // Forward a request to the appropriate Durable Object
 // ---------------------------------------------------------------------------
 
-function forwardToDO(request: Request, env: Env, sessionId: string): Promise<Response> {
+async function forwardToDO(request: Request, env: Env, sessionId: string): Promise<Response> {
   const doId = env.SESSION_DO.idFromName(sessionId);
   const stub = env.SESSION_DO.get(doId);
 
@@ -126,7 +141,22 @@ function forwardToDO(request: Request, env: Env, sessionId: string): Promise<Res
     body: request.body,
   });
 
-  return stub.fetch(doRequest);
+  const response = await stub.fetch(doRequest);
+
+  if (response.status === 101) {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,18 @@
+name = "kleepee-v1"
+main = "worker/index.ts"
+compatibility_date = "2024-10-22"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "SESSION_DO"
+class_name = "SessionDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SessionDurableObject"]
+
+[env.production]
+name = "kleepee-v1-production"
+routes = [
+  { pattern = "kleepee.app/api/*", zone_name = "kleepee.app" }
+]
