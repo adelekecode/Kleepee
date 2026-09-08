@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local Wrangler development. Never use VITE_ for these.
+# Create a TURN key in Cloudflare Realtime > TURN, then fill in its values.
+
+

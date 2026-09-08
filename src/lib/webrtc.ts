@@ -11,24 +11,28 @@ export class WebRTCManager {
   private pc: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
   private callbacks: WebRTCCallbacks;
-  private iceServers: RTCIceServer[];
+  private iceServers: RTCIceServer[] | (() => Promise<RTCIceServer[]>);
+  private generation = 0;
   private pendingIceCandidates: RTCIceCandidateInit[] = [];
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
   private failureReported = false;
 
-  constructor(iceServers: RTCIceServer[], callbacks: WebRTCCallbacks) {
+  constructor(iceServers: RTCIceServer[] | (() => Promise<RTCIceServer[]>), callbacks: WebRTCCallbacks) {
     this.iceServers = iceServers;
     this.callbacks = callbacks;
   }
 
-  private createPeerConnection(): RTCPeerConnection {
+  private async createPeerConnection(): Promise<RTCPeerConnection> {
     if (this.pc) this.close();
+    const generation = ++this.generation;
+    const iceServers = typeof this.iceServers === "function" ? await this.iceServers() : this.iceServers;
+    if (generation !== this.generation) throw new Error("Connection attempt cancelled.");
     this.failureReported = false;
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection({ iceServers });
+    this.pc = pc;
     this.startConnectionTimer();
 
     pc.onconnectionstatechange = () => {
-      if (import.meta.env.DEV) console.debug("Kleepee peer state", pc.connectionState);
       if (pc !== this.pc) return;
       if (pc.connectionState === "failed") this.reportFailure();
       if (pc.connectionState === "disconnected") this.startConnectionTimer();
@@ -37,12 +41,10 @@ export class WebRTCManager {
       }
     };
     pc.oniceconnectionstatechange = () => {
-      if (import.meta.env.DEV) console.debug("Kleepee ICE state", pc.iceConnectionState);
       if (pc === this.pc && pc.iceConnectionState === "failed") this.reportFailure();
     };
 
     pc.onicecandidate = (event) => {
-      if (import.meta.env.DEV) console.debug("Kleepee ICE candidate", event.candidate?.type ?? "complete");
       if (event.candidate) {
         this.callbacks.onIceCandidate(event.candidate);
       }
@@ -62,16 +64,6 @@ export class WebRTCManager {
   }
 
   private reportFailure(): void {
-    if (import.meta.env.DEV) {
-      void this.pc?.getStats().then((stats) => {
-        const summary: unknown[] = [];
-        stats.forEach((stat) => {
-          if (stat.type === "candidate-pair") summary.push({ type: stat.type, state: stat.state, requestsSent: stat.requestsSent, responsesReceived: stat.responsesReceived });
-          if (stat.type === "local-candidate" || stat.type === "remote-candidate") summary.push({ type: stat.type, candidateType: stat.candidateType, protocol: stat.protocol });
-        });
-        console.debug("Kleepee connection failure", JSON.stringify(summary));
-      });
-    }
     this.clearConnectionTimer();
     if (this.failureReported) return;
     this.failureReported = true;
@@ -119,13 +111,14 @@ export class WebRTCManager {
    * Initiator path: create PeerConnection + DataChannel, return offer SDP.
    */
   async createOffer(): Promise<RTCSessionDescriptionInit> {
-    this.pc = this.createPeerConnection();
+    const pc = await this.createPeerConnection();
+    if (pc !== this.pc) throw new Error("Connection attempt cancelled.");
 
-    const channel = this.pc.createDataChannel("kleepee");
+    const channel = pc.createDataChannel("kleepee");
     this.wireDataChannel(channel);
 
-    const offer = await this.pc.createOffer();
-    await this.pc.setLocalDescription(offer);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
     this.callbacks.onOffer(offer);
     return offer;
   }
@@ -137,16 +130,17 @@ export class WebRTCManager {
   async handleOffer(
     offer: RTCSessionDescriptionInit
   ): Promise<RTCSessionDescriptionInit> {
-    this.pc = this.createPeerConnection();
+    const pc = await this.createPeerConnection();
+    if (pc !== this.pc) throw new Error("Connection attempt cancelled.");
 
-    this.pc.ondatachannel = (event) => {
+    pc.ondatachannel = (event) => {
       this.wireDataChannel(event.channel);
     };
 
-    await this.pc.setRemoteDescription(offer);
+    await pc.setRemoteDescription(offer);
     await this.flushPendingIceCandidates();
-    const answer = await this.pc.createAnswer();
-    await this.pc.setLocalDescription(answer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
     this.callbacks.onAnswer(answer);
     return answer;
   }
@@ -195,6 +189,7 @@ export class WebRTCManager {
    * Tear down both the DataChannel and PeerConnection.
    */
   close(): void {
+    this.generation += 1;
     this.clearConnectionTimer();
     // Closing an old transport must not start another reconnect attempt.
     if (this.dataChannel) {

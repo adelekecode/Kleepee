@@ -1,4 +1,3 @@
-import { defineConfig } from "vitest/config";
 import {
   defineWorkersConfig,
 } from "@cloudflare/vitest-pool-workers/config";
@@ -10,6 +9,9 @@ export default defineWorkersConfig({
         // Each test creates a unique session. The installed pool cannot snapshot
         // SQLite WAL sidecar files reliably, so avoid per-test storage snapshots.
         isolatedStorage: false,
+        // Reuse one Worker across files: the installed pool otherwise registers
+        // duplicate SQLite bindings when storage isolation is disabled.
+        singleWorker: true,
         wrangler: { configPath: "./wrangler.jsonc" },
       },
     },

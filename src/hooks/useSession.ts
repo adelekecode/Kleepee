@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef } from "react";
 import { WebRTCManager } from "../lib/webrtc";
+import { createIceServerLoader } from "../lib/iceServers";
 import { deriveKey, encrypt, decrypt, generateSessionSecret } from "../lib/crypto";
 import type { ClientMessage, ServerMessage, SessionState, TextItem } from "../types";
 
@@ -7,11 +8,6 @@ const WORKER_BASE =
   typeof import.meta.env !== "undefined" && import.meta.env.VITE_WORKER_URL
     ? (import.meta.env.VITE_WORKER_URL as string)
     : "https://kleepee-worker.adelekecode.dev";
-
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-];
 
 const MAX_RETRIES: number | null = null;
 const BACKOFF_DELAYS = [2000, 4000, 8000, 15000];
@@ -360,6 +356,7 @@ export function useSession(): UseSessionResult {
 
   const wsRef = useRef<WebSocket | null>(null);
   const rtcRef = useRef<WebRTCManager | null>(null);
+  const iceLoaderRef = useRef<{ key: string; load: () => Promise<RTCIceServer[]> } | null>(null);
   const cryptoKeyRef = useRef<CryptoKey | null>(null);
   const initialTextRef = useRef<string | null>(null);
   const initialTextSentRef = useRef(false);
@@ -526,7 +523,6 @@ export function useSession(): UseSessionResult {
   }
 
   function sendSignal(message: ClientMessage) {
-    if (import.meta.env.DEV) console.debug("Kleepee signal send", roleRef.current, message.type, wsRef.current?.readyState);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     }
@@ -587,7 +583,15 @@ export function useSession(): UseSessionResult {
   function setupWebRTC(operationId = operationIdRef.current): WebRTCManager {
     rtcRef.current?.close();
 
-    const manager = new WebRTCManager(ICE_SERVERS, {
+    const sessionId = sessionIdRef.current!;
+    const key = `${sessionId}:${deviceIdRef.current}`;
+    if (iceLoaderRef.current?.key !== key) {
+      iceLoaderRef.current = {
+        key,
+        load: createIceServerLoader(WORKER_BASE, sessionId, deviceIdRef.current),
+      };
+    }
+    const manager = new WebRTCManager(iceLoaderRef.current.load, {
       onMessage: async (data: Uint8Array) => {
         if (operationId !== operationIdRef.current || rtcRef.current !== manager || !cryptoKeyRef.current) return;
 
@@ -690,7 +694,6 @@ export function useSession(): UseSessionResult {
       }
 
       try {
-        if (import.meta.env.DEV) console.debug("Kleepee signal receive", roleRef.current, message.type);
         switch (message.type) {
           case "peer.join": {
             clearRetryTimer();

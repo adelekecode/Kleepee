@@ -47,9 +47,15 @@ export function WaitingPage() {
     <main className="fade-in flex flex-1 flex-col justify-center py-6">
       <section className="panel flex flex-col gap-6 text-center">
         <div className="space-y-2">
-          <h1 className="text-2xl font-semibold text-kleepee-espresso">Waiting for another device...</h1>
+          <h1 className="text-2xl font-semibold text-kleepee-espresso">
+            {state === "CONNECTING" ? "Connecting securely..." : state === "DISCONNECTED" ? "Connection interrupted" : "Waiting for another device..."}
+          </h1>
           <p className="mx-auto max-w-sm text-sm leading-6 text-kleepee-muted">
-            Scan this code with the other device camera.
+            {state === "CONNECTING"
+              ? "Device found. Keep both tabs open while Kleepee connects them."
+              : state === "DISCONNECTED"
+                ? "Keep both devices open while Kleepee waits for the connection to return."
+                : "Scan this code with the other device camera."}
           </p>
         </div>
 

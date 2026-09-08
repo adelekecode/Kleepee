@@ -12,8 +12,9 @@
  */
 
 export { SessionDurableObject } from "./durable-object";
+import { getIceServerConfiguration, type TurnEnv } from "./ice-servers";
 
-interface Env {
+interface Env extends TurnEnv {
   SESSION_DO: DurableObjectNamespace;
 }
 
@@ -27,12 +28,13 @@ const CORS_HEADERS: HeadersInit = {
   "Access-Control-Allow-Headers": "Content-Type, Upgrade, Connection",
 };
 
-function corsJson(body: unknown, status = 200): Response {
+function corsJson(body: unknown, status = 200, noStore = false): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "Content-Type": "application/json",
       ...CORS_HEADERS,
+      ...(noStore ? { "Cache-Control": "no-store" } : {}),
     },
   });
 }
@@ -82,7 +84,12 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // Route patterns for /sessions/:sessionId and /sessions/:sessionId/ws
   const sessionWsMatch = pathname.match(/^\/sessions\/([A-Z0-9]+)\/ws$/i);
+  const sessionIceMatch = pathname.match(/^\/sessions\/([A-Z0-9]+)\/ice-servers$/i);
   const sessionMatch = pathname.match(/^\/sessions\/([A-Z0-9]+)$/i);
+
+  if (method === "GET" && sessionIceMatch) {
+    return sessionIceServers(request, env, sessionIceMatch[1].toUpperCase());
+  }
 
   // GET /sessions/:sessionId/ws  → WebSocket upgrade to DO
   if (method === "GET" && sessionWsMatch) {
@@ -105,6 +112,39 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // All other routes → 404
   return corsText("Not Found", 404);
+}
+
+async function sessionIceServers(request: Request, env: Env, sessionId: string): Promise<Response> {
+  try {
+    const deviceId = new URL(request.url).searchParams.get("deviceId");
+    if (!deviceId) return corsJson({ error: "Device identity required" }, 400, true);
+
+    // Fetch state without forwarding Upgrade headers: this route must never
+    // consume a peer slot or mint credentials for an empty/expired session.
+    const stateUrl = new URL(request.url);
+    stateUrl.pathname = "/";
+    const stub = env.SESSION_DO.get(env.SESSION_DO.idFromName(sessionId));
+    const stateResponse = await stub.fetch(new Request(stateUrl));
+    if (stateResponse.status === 410) {
+      return corsJson({ error: "Session expired" }, 410, true);
+    }
+    if (!stateResponse.ok) return corsJson({ error: "Session unavailable" }, 503, true);
+    const state = await stateResponse.json() as {
+      sessionState: string;
+      deviceCount: number;
+      canJoin: boolean;
+    };
+    if (state.sessionState === "EXPIRED") return corsJson({ error: "Session expired" }, 410, true);
+    if (state.deviceCount === 0) return corsJson({ error: "Session not found" }, 404, true);
+    if (state.canJoin === false) return corsJson({ error: "Session is full" }, 409, true);
+    if (typeof state.deviceCount !== "number" || typeof state.canJoin !== "boolean") {
+      return corsJson({ error: "Session unavailable" }, 503, true);
+    }
+
+    return corsJson(await getIceServerConfiguration(env), 200, true);
+  } catch {
+    return corsJson({ error: "Connection relay unavailable" }, 503, true);
+  }
 }
 
 function normalizePath(pathname: string): string {

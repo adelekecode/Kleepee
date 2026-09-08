@@ -66,7 +66,7 @@ export function JoinPage() {
   const isReconnecting = state === "DISCONNECTED" && retryAttempt > 0;
   const title = isReconnecting ? "Reconnecting securely..." : "Connecting securely...";
   const detail = isReconnecting
-    ? `Still waiting for the first device to respond. Retry ${retryAttempt} is running.`
+    ? `Keep both devices open while Kleepee retries the connection. Attempt ${retryAttempt}.`
     : "Keep this tab open while Kleepee links both devices.";
 
   return (

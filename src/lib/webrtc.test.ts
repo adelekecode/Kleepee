@@ -22,7 +22,7 @@ class FakePeer {
   onicecandidate: ((event: { candidate: unknown }) => void) | null = null;
   ondatachannel = null;
   channel = new FakeChannel();
-  constructor() { FakePeer.instances.push(this); }
+  constructor(readonly configuration?: RTCConfiguration) { FakePeer.instances.push(this); }
   createDataChannel = () => this.channel;
   createOffer = async () => ({ type: "offer", sdp: "test" });
   createAnswer = async () => ({ type: "answer", sdp: "test" });
@@ -105,5 +105,30 @@ describe("WebRTC connection recovery", () => {
     await manager.addIceCandidate(candidate);
     await manager.handleOffer({ type: "offer", sdp: "test" });
     expect(FakePeer.instances[0].addIceCandidate).toHaveBeenCalledWith(candidate);
+  });
+
+  it.each(["offer", "answer"])("loads TURN credentials before creating a peer for an %s", async (role) => {
+    const iceServers = [{ urls: "turns:turn.cloudflare.com:443", username: "user", credential: "short-lived" }];
+    const load = vi.fn(async () => iceServers);
+    manager = new WebRTCManager(load, {
+      onStateChange, onMessage: vi.fn(), onIceCandidate: vi.fn(), onOffer: vi.fn(), onAnswer: vi.fn(),
+    });
+    if (role === "offer") await manager.createOffer();
+    else await manager.handleOffer({ type: "offer", sdp: "test" });
+    expect(load).toHaveBeenCalledOnce();
+    expect(FakePeer.instances[0].configuration).toEqual({ iceServers });
+  });
+
+  it("does not resurrect a closed manager when credentials finish loading", async () => {
+    let resolve!: (servers: RTCIceServer[]) => void;
+    manager = new WebRTCManager(() => new Promise((done) => { resolve = done; }), {
+      onStateChange, onMessage: vi.fn(), onIceCandidate: vi.fn(), onOffer: vi.fn(), onAnswer: vi.fn(),
+    });
+    const offer = manager.createOffer();
+    manager.close();
+    resolve([]);
+    await expect(offer).rejects.toThrow("cancelled");
+    expect(FakePeer.instances).toHaveLength(0);
+    expect(onStateChange).not.toHaveBeenCalled();
   });
 });
