@@ -13,6 +13,7 @@ new_sqlite_classes = ["SessionDurableObject"]
 
 [env.production]
 name = "kleepee-v1-production"
+workers_dev = true
 routes = [
   { pattern = "kleepee-worker.adelekecode.dev/*", zone_name = "adelekecode.dev" }
 ]

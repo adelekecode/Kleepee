@@ -27,6 +27,7 @@
   "env": {
     "production": {
       "name": "kleepee-v1-production",
+      "workers_dev": true,
       "durable_objects": {
         "bindings": [
           {
