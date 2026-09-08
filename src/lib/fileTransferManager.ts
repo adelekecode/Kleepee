@@ -124,9 +124,8 @@ export class FileTransferManager {
       for (let index = 0; index < totalChunks; index++) {
         const data = await readChunk(job.file, index, chunkSize);
         await send({ type: "file.chunk", id, index, data });
-        this.update(id, { progress: (index + 1) / totalChunks, receivedChunks: index + 1 });
+        this.update(id, { progress: Math.min(0.99, (index + 1) / totalChunks), receivedChunks: index + 1 });
       }
-      this.update(id, { progress: 1 });
       let timer: ReturnType<typeof setTimeout>;
       const acknowledgement = new Promise<boolean>((resolve) => {
         const finish = (ok: boolean) => { clearTimeout(timer); this.acknowledgements.delete(id); resolve(ok); };
