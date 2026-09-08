@@ -282,7 +282,7 @@ Build Kleepee V1 from scratch: a browser-based peer-to-peer text sharing utility
     - Display "Session expired. [START NEW SESSION]" with a button that navigates to `/` and clears session state
     - _Requirements: 9.5, 10.4, 10.5_
 
-  - [ ] 13.6 Wire app routing in `src/App.tsx`
+  - [~] 13.6 Wire app routing in `src/App.tsx`
     - Use React Router v6 with routes:
       - `/` → `HomePage`
       - `/waiting` → `WaitingPage`
@@ -292,18 +292,18 @@ Build Kleepee V1 from scratch: a browser-based peer-to-peer text sharing utility
     - Provide session context (from `useSession`) via React context or prop drilling at app level
     - _Requirements: 3.1, 10.1–10.5_
 
-- [ ] 14. Checkpoint — Ensure all tests pass
+- [~] 14. Checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 15. Wrangler configuration and deployment wiring
-  - [ ] 15.1 Finalize `wrangler.jsonc`
+  - [~] 15.1 Finalize `wrangler.jsonc`
     - Set `name`, `main = "worker/index.ts"`, `compatibility_date`
     - Declare Durable Object binding: `SESSION_DO → SessionDurableObject`
     - Declare Durable Object migration (new class)
     - Add `[env.production]` with `routes` pointing to `kleepee.app`
     - _Requirements: 11.1–11.3_
 
-  - [ ] 15.2 Create `public/_redirects` (Cloudflare Pages SPA fallback)
+  - [~] 15.2 Create `public/_redirects` (Cloudflare Pages SPA fallback)
     - Add `/* /index.html 200` so React Router handles all client-side routes including `/j/:sessionId`
     - _Requirements: 3.1, 10.1–10.5_
 
