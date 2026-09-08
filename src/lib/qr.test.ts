@@ -63,3 +63,14 @@ describe("parseJoinURL", () => {
     expect(recovered.sessionSecret).toBe(sessionSecret);
   });
 });
+
+describe("join link validation", () => {
+  it.each([
+    "https://kleepee.adelekecode.dev/not-a-session#secret",
+    "https://kleepee.adelekecode.dev/j/ABC",
+    "ftp://kleepee.adelekecode.dev/j/ABC#secret",
+    "https://user:password@kleepee.adelekecode.dev/j/ABC#secret",
+  ])("rejects invalid join link %s", (link) => {
+    expect(() => parseJoinURL(link)).toThrow("Invalid Kleepee join link");
+  });
+});

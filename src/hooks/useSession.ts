@@ -487,9 +487,13 @@ export function useSession(): UseSessionResult {
       content: text,
     };
 
+    const manager = rtcRef.current;
+    const key = cryptoKeyRef.current;
+    const operationId = operationIdRef.current;
     try {
-      const payload = await encrypt(cryptoKeyRef.current, JSON.stringify(item));
-      const sent = rtcRef.current.send(payload);
+      const payload = await encrypt(key, JSON.stringify(item));
+      if (rtcRef.current !== manager || operationId !== operationIdRef.current) return cancelledOperation();
+      const sent = manager.send(payload);
 
       if (!sent) {
         const error = makeError("send_failed", "Could not send that text. Try again.");
@@ -609,14 +613,9 @@ export function useSession(): UseSessionResult {
     let receiveQueue = Promise.resolve();
     const loadIce = iceLoaderRef.current.load;
     const manager = new WebRTCManager(async () => {
-      const servers = await loadIce();
-      if (import.meta.env.VITE_ALLOW_TURN_RELAY === "true") return servers;
+      if (import.meta.env.VITE_ALLOW_TURN_RELAY === "true") return loadIce();
       // Direct-only by default: a TURN candidate would relay file ciphertext.
-      return servers.flatMap((server) => {
-        const urls = (Array.isArray(server.urls) ? server.urls : [server.urls])
-          .filter((url) => url.startsWith("stun:"));
-        return urls.length ? [{ urls }] : [];
-      });
+      return [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
     }, {
       onMessage: (data: Uint8Array) => {
         receiveQueue = receiveQueue.then(async () => {

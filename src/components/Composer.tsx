@@ -72,7 +72,7 @@ export function Composer({ disabled = false, pending = false, error, actionLabel
     event.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
-    if (!disabled) stageFiles(event.dataTransfer.files);
+    if (!disabled && !pending) stageFiles(event.dataTransfer.files);
   }
 
   return (
@@ -82,14 +82,14 @@ export function Composer({ disabled = false, pending = false, error, actionLabel
         if (!event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
         dragDepth.current += 1;
-        if (!disabled) setDragging(true);
+        if (!disabled && !pending) setDragging(true);
       }}
       onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
       onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); }}
     >
       <form className="flex flex-col gap-3" onSubmit={(event) => { event.preventDefault(); void submit(); }} aria-busy={busy}>
         <label className="sr-only" htmlFor={id}>Text to share</label>
-        <textarea id={id} className="input-field min-h-[144px]" disabled={disabled} rows={4} value={draft}
+        <textarea id={id} className="input-field min-h-[144px]" disabled={disabled || pending} rows={4} value={draft}
           aria-invalid={isTooLarge} aria-describedby={`${id}-hint${displayError ? ` ${id}-error` : ""}`}
           placeholder={disabled ? "Waiting for a connection…" : dragging ? "Drop files here…" : placeholder}
           onChange={(event) => { draftRevision.current += 1; setDraft(event.target.value); setLocalError(null); }}
@@ -98,11 +98,11 @@ export function Composer({ disabled = false, pending = false, error, actionLabel
         {stagedFiles.length > 0 && <ul className="flex flex-col gap-2" aria-label="Files to send">
           {stagedFiles.map((file, index) => <li key={index} className="flex min-w-0 items-center gap-3 rounded-[18px] border border-kleepee-border bg-kleepee-panel px-3 py-2">
             <div className="min-w-0 flex-1"><p className="break-all text-sm text-kleepee-espresso">{file.name}</p><p className="text-xs text-kleepee-muted">{formatFileSize(file.size)}</p></div>
-            <button type="button" className="btn-secondary shrink-0" aria-label={`Remove ${file.name}`} onClick={() => setStagedFiles((files) => files.filter((_, i) => i !== index))}>×</button>
+            <button type="button" className="btn-secondary shrink-0" aria-label={`Remove ${file.name}`} disabled={pending} onClick={() => setStagedFiles((files) => files.filter((_, i) => i !== index))}>×</button>
           </li>)}
         </ul>}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <button type="button" disabled={disabled} className="btn-secondary gap-2" onClick={() => fileInputRef.current?.click()}>
+          <button type="button" disabled={disabled || pending} className="btn-secondary gap-2" onClick={() => fileInputRef.current?.click()}>
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m8 12 7-7a3 3 0 0 1 4 4L9 19a5 5 0 0 1-7-7L13 1" transform="translate(1 2) scale(.85)"/><path d="m8 12 6-6"/></svg>
             Attach files
           </button>

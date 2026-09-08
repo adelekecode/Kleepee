@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { QRCode } from "../components/QRCode";
+import { TransferCard } from "../components/FileCard";
 import { StatusBar } from "../components/StatusBar";
 import { buildJoinURL } from "../lib/qr";
 import { useSessionContext } from "../context/SessionContext";
@@ -19,6 +20,8 @@ export function WaitingPage() {
     retryAttempt,
     maxRetries,
     terminalReason,
+    fileTransfers,
+    cancelFile,
   } = useSessionContext();
   const joinUrl = useMemo(() => {
     if (!sessionId || !sessionSecret) return "";
@@ -88,6 +91,13 @@ export function WaitingPage() {
             <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm leading-6 text-kleepee-espresso">
               {initialText}
             </p>
+          </div>
+        )}
+
+        {fileTransfers.size > 0 && (
+          <div className="space-y-3 text-left">
+            <p className="text-sm text-kleepee-muted">Files ready to send. Keep this tab open until the transfer finishes.</p>
+            {[...fileTransfers.values()].map((transfer) => <TransferCard key={transfer.id} transfer={transfer} onCancel={cancelFile} />)}
           </div>
         )}
 
