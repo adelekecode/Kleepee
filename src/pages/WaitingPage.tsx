@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { QRCode } from "../components/QRCode";
 import { StatusBar } from "../components/StatusBar";
 import { buildJoinURL } from "../lib/qr";
 import { useSessionContext } from "../context/SessionContext";
+import { getNotificationPermission, requestNotificationPermission } from "../lib/notifications";
 
 export function WaitingPage() {
   const navigate = useNavigate();
@@ -23,6 +24,13 @@ export function WaitingPage() {
     if (!sessionId || !sessionSecret) return "";
     return buildJoinURL(sessionId, sessionSecret);
   }, [sessionId, sessionSecret]);
+
+  const [notifPermission, setNotifPermission] = useState(() => getNotificationPermission());
+
+  async function handleEnableNotifications() {
+    const result = await requestNotificationPermission();
+    setNotifPermission(result);
+  }
 
   useEffect(() => {
     if (state === "CONNECTED") {
@@ -86,6 +94,16 @@ export function WaitingPage() {
         <button className="btn-danger self-center" type="button" onClick={cancelSession}>
           Cancel
         </button>
+
+        {notifPermission === "default" && (
+          <button
+            className="self-center text-xs text-kleepee-muted underline underline-offset-2 hover:text-kleepee-espresso focus:outline-none"
+            type="button"
+            onClick={handleEnableNotifications}
+          >
+            Enable notifications for incoming messages
+          </button>
+        )}
       </section>
     </main>
   );
