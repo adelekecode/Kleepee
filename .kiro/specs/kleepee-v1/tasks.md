@@ -236,12 +236,12 @@ Build Kleepee V1 from scratch: a browser-based peer-to-peer text sharing utility
     - Render a scrollable list of `TextCard` components from `items`; newest item at bottom; auto-scroll on new item
     - _Requirements: 6.2, 6.4_
 
-  - [-] 12.3 Create `src/components/QRCode.tsx`
+  - [x] 12.3 Create `src/components/QRCode.tsx`
     - Accept `url: string` prop; call `generateQRDataURL(url)` on mount; render `<img>` with the data URL
     - On generation failure: render the raw URL with a copy button as fallback
     - _Requirements: 2.4, 2.5_
 
-  - [~] 12.4 Create `src/components/StatusBar.tsx`
+  - [x] 12.4 Create `src/components/StatusBar.tsx`
     - Accept `state: SessionState` and `peerDeviceName: string | null`; render the appropriate status message per state
     - CONNECTED: "● Connected to [peerDeviceName]"
     - CONNECTING / WAITING: activity indicator
@@ -250,7 +250,7 @@ Build Kleepee V1 from scratch: a browser-based peer-to-peer text sharing utility
     - Only show CONNECTED indicator when DataChannel is `"open"` (driven by `state === "CONNECTED"`)
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
-  - [~] 12.5 Create `src/components/TextInput.tsx`
+  - [ ] 12.5 Create `src/components/TextInput.tsx`
     - Textarea + submit button; `onSubmit(text: string)` callback prop
     - Disable submit while `state !== "CONNECTED"` (except on HomePage where state is unused)
     - Show inline error if returned from `sendText` (e.g. "That message is too large to send.")

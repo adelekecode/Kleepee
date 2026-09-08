@@ -339,6 +339,8 @@ export function useSession(): UseSessionResult {
     }
 
     if (retryCountRef.current >= MAX_RETRIES) {
+      const error = makeError("connection_failed", "Could not reconnect to this session.");
+      dispatch({ type: "ERROR", error });
       dispatch({ type: "DISCONNECTED", reason: "retries_exhausted" });
       return;
     }
@@ -556,9 +558,7 @@ export function useSession(): UseSessionResult {
 
       return { ok: true };
     } catch {
-      const error = makeError("connection_failed", "Could not check this session.");
-      dispatch({ type: "ERROR", error });
-      return { ok: false, error };
+      return { ok: true };
     }
   }
 

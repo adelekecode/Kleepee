@@ -1,0 +1,93 @@
+import { useEffect } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
+import { StatusBar } from "../components/StatusBar";
+import { TextFeed } from "../components/TextFeed";
+import { TextInput } from "../components/TextInput";
+import { useSessionContext } from "../context/SessionContext";
+
+export function ConnectedPage() {
+  const navigate = useNavigate();
+  const {
+    state,
+    role,
+    sessionId,
+    peerDeviceName,
+    items,
+    error,
+    dataChannelState,
+    retryAttempt,
+    maxRetries,
+    terminalReason,
+    device,
+    sendText,
+    disconnect,
+    reset,
+  } = useSessionContext();
+
+  useEffect(() => {
+    if (state === "EXPIRED") {
+      navigate("/expired", { replace: true });
+    }
+  }, [navigate, state]);
+
+  if (!sessionId) {
+    return <Navigate to="/" replace />;
+  }
+
+  if (state === "WAITING" && role === "initiator") {
+    return <Navigate to="/waiting" replace />;
+  }
+
+  const canSend = state === "CONNECTED" && dataChannelState === "open";
+  const ended = state === "DISCONNECTED" && terminalReason === "manual";
+  const exhausted = state === "DISCONNECTED" && terminalReason === "retries_exhausted";
+
+  async function handleSend(text: string) {
+    const result = await sendText(text, device.deviceName, device.deviceId);
+    return result.ok;
+  }
+
+  function createNewSession() {
+    reset();
+    navigate("/", { replace: true });
+  }
+
+  return (
+    <main className="fade-in flex min-h-0 flex-1 flex-col gap-4 pb-2">
+      <section className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <StatusBar
+          state={state}
+          dataChannelState={dataChannelState}
+          peerDeviceName={peerDeviceName}
+          retryAttempt={retryAttempt}
+          maxRetries={maxRetries}
+          terminalReason={terminalReason}
+        />
+
+        {ended || exhausted ? (
+          <button className="btn-primary" type="button" onClick={createNewSession}>
+            Create new session
+          </button>
+        ) : (
+          <button className="btn-danger" type="button" onClick={disconnect}>
+            End session
+          </button>
+        )}
+      </section>
+
+      <TextFeed items={items} />
+
+      <section className="panel">
+        <TextInput
+          label="Message"
+          placeholder={canSend ? "Paste or type something..." : "Session ended"}
+          actionLabel="Send"
+          disabled={!canSend}
+          minRows={3}
+          error={error?.message}
+          onSubmit={handleSend}
+        />
+      </section>
+    </main>
+  );
+}

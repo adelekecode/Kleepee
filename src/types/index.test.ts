@@ -3,7 +3,7 @@
  * Requirements: 12.1, 12.2, 12.4
  */
 import { describe, it, expect } from "vitest";
-import type { TextItem, DeviceIdentity, SessionContext, SessionState } from "./index";
+import type { TextItem, SessionState } from "./index";
 
 describe("TextItem serialization round trip (Req 12.1, 12.2, 12.4)", () => {
   it("serializes and deserializes a TextItem without data loss", () => {
