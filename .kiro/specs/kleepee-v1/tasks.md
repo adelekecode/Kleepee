@@ -236,7 +236,7 @@ Build Kleepee V1 from scratch: a browser-based peer-to-peer text sharing utility
     - Render a scrollable list of `TextCard` components from `items`; newest item at bottom; auto-scroll on new item
     - _Requirements: 6.2, 6.4_
 
-  - [~] 12.3 Create `src/components/QRCode.tsx`
+  - [-] 12.3 Create `src/components/QRCode.tsx`
     - Accept `url: string` prop; call `generateQRDataURL(url)` on mount; render `<img>` with the data URL
     - On generation failure: render the raw URL with a copy button as fallback
     - _Requirements: 2.4, 2.5_
@@ -307,7 +307,7 @@ Build Kleepee V1 from scratch: a browser-based peer-to-peer text sharing utility
     - Add `/* /index.html 200` so React Router handles all client-side routes including `/j/:sessionId`
     - _Requirements: 3.1, 10.1–10.5_
 
-- [ ] 16. Final checkpoint — Ensure all tests pass
+- [~] 16. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
