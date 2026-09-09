@@ -45,9 +45,15 @@ export type FileFrame = FileStartFrame | FileChunkFrame | {
   id: string;
 };
 
+export interface PreparedFileFrame {
+  send: () => Promise<boolean>;
+}
+
 export interface FileTransport {
   chunkSize: number;
   send: (frame: FileFrame, signal: AbortSignal) => Promise<boolean>;
+  /** Encrypt ahead of time; sending still occurs in file-chunk order. */
+  prepare?: (frame: FileFrame, signal: AbortSignal) => Promise<PreparedFileFrame>;
 }
 
 export interface FileSelectionResult {

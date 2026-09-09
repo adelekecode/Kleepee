@@ -1,10 +1,12 @@
 import { CHUNK_SIZE, isValidStartFrame, MAX_FILE_BYTES, planChunks, readChunk, validateFile, validFileId } from "./fileTransfer";
 import type { DeviceIdentity } from "../types";
-import type { FileFrame, FileItem, FileSelectionResult, FileStartFrame, FileTransfer, FileTransport } from "../types/files";
+import type { FileFrame, FileItem, FileSelectionResult, FileStartFrame, FileTransfer, FileTransport, PreparedFileFrame } from "../types/files";
 
 export const TRANSFER_TIMEOUT_MS = 60_000;
 const MAX_RETAINED_BYTES = 100 * 1024 * 1024;
 const MAX_PENDING_FILES = 20;
+export const PREPARE_WINDOW = 4;
+export const PROGRESS_INTERVAL_MS = 100;
 interface Outgoing { file: File; controller: AbortController }
 interface Incoming { start: FileStartFrame; chunks: Uint8Array[]; bytes: number; timer: ReturnType<typeof setTimeout> }
 interface Snapshot { transfers: Map<string, FileTransfer>; fileItems: FileItem[] }
@@ -17,6 +19,7 @@ export class FileTransferManager {
   private queue: string[] = [];
   private transport: FileTransport | null = null;
   private pumping = false;
+  private progressTimer: ReturnType<typeof setTimeout> | null = null;
   private epoch = 0;
   private retainedReceiveBytes = 0;
   private urls = new Set<string>();
@@ -27,6 +30,8 @@ export class FileTransferManager {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.snapshot;
   private publish() {
+    if (this.progressTimer !== null) clearTimeout(this.progressTimer);
+    this.progressTimer = null;
     const values = [...this.items.values()];
     this.snapshot = {
       transfers: new Map(values.filter((item) => ["queued", "sending", "receiving"].includes(item.status)).map((item) => [item.id, item])),
@@ -34,11 +39,14 @@ export class FileTransferManager {
     };
     this.listeners.forEach((listener) => listener());
   }
-  private update(id: string, patch: Partial<FileTransfer>) {
+  private update(id: string, patch: Partial<FileTransfer>, progressOnly = false) {
     const item = this.items.get(id);
     if (!item) return;
     this.items.set(id, { ...item, ...patch });
-    this.publish();
+    if (!progressOnly) this.publish();
+    else if (this.progressTimer === null) {
+      this.progressTimer = setTimeout(() => this.publish(), PROGRESS_INTERVAL_MS);
+    }
   }
 
   enqueue = (files: File[], device: DeviceIdentity): FileSelectionResult => {
@@ -121,10 +129,36 @@ export class FileTransferManager {
       if (!Number.isInteger(chunkSize) || chunkSize < 1024) throw new Error("Connection cannot carry file chunks.");
       await send({ type: "file.start", id, senderId: item.senderId, senderName: item.senderName, timestamp: item.timestamp,
         fileName: item.fileName, fileSize: item.fileSize, mimeType: item.mimeType, totalChunks, chunkSize });
+      // Bound file reads and encryption to four chunks, overlapping preparation
+      // with network drain. Every promise handles rejection immediately so a
+      // cancelled future chunk cannot create an unhandled rejection.
+      type Preparation = { frame: PreparedFileFrame } | { error: unknown };
+      const prepare = async (index: number): Promise<Preparation> => {
+        try {
+          if (!active()) throw new Error("Transfer stopped.");
+          const data = await readChunk(job.file, index, chunkSize);
+          if (!active()) throw new Error("Transfer stopped.");
+          const chunk: FileFrame = { type: "file.chunk", id, index, data };
+          const frame = transport.prepare
+            ? await transport.prepare(chunk, signal)
+            : { send: () => transport.send(chunk, signal) };
+          return { frame };
+        } catch (error) { return { error }; }
+      };
+      const pending: Promise<Preparation>[] = [];
+      let next = 0;
+      const fill = () => {
+        while (pending.length < PREPARE_WINDOW && next < totalChunks && active()) pending.push(prepare(next++));
+      };
+      fill();
       for (let index = 0; index < totalChunks; index++) {
-        const data = await readChunk(job.file, index, chunkSize);
-        await send({ type: "file.chunk", id, index, data });
-        this.update(id, { progress: (index + 1) / totalChunks, receivedChunks: index + 1 });
+        const prepared = await pending.shift()!;
+        if (!active()) return;
+        if ("error" in prepared) throw prepared.error;
+        if (!await prepared.frame.send()) throw new Error("Could not send file. Reconnect, then retry.");
+        if (!active()) return;
+        this.update(id, { progress: (index + 1) / totalChunks, receivedChunks: index + 1 }, true);
+        fill();
       }
       this.update(id, { progress: 1 });
       let timer: ReturnType<typeof setTimeout>;
@@ -248,7 +282,7 @@ export class FileTransferManager {
       entry.bytes += frame.data.byteLength;
       clearTimeout(entry.timer);
       entry.timer = this.receiveDeadline(frame.id);
-      this.update(frame.id, { receivedChunks: entry.chunks.length, progress: entry.bytes / entry.start.fileSize });
+      this.update(frame.id, { receivedChunks: entry.chunks.length, progress: entry.bytes / entry.start.fileSize }, true);
       return;
     }
     if (frame.type === "file.complete") {

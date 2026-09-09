@@ -1,3 +1,6 @@
+export const FILE_BUFFER_HIGH = 1024 * 1024;
+export const FILE_BUFFER_LOW = 512 * 1024;
+
 import type { WebRTCCallbacks } from "../types/index";
 
 // Re-export WebRTCCallbacks so consumers can import it from this module
@@ -192,7 +195,7 @@ export class WebRTCManager {
   async sendBuffered(data: Uint8Array, signal: AbortSignal): Promise<boolean> {
     const channel = this.dataChannel;
     if (!channel || channel.readyState !== "open" || signal.aborted || data.byteLength > this.maxMessageSize) return false;
-    if (channel.bufferedAmount > 256 * 1024) {
+    while (channel.bufferedAmount + data.byteLength > Math.max(FILE_BUFFER_HIGH, data.byteLength)) {
       const ready = await new Promise<boolean>((resolve) => {
         const finish = (ok: boolean) => {
           clearTimeout(timer);
@@ -207,15 +210,15 @@ export class WebRTCManager {
         const closed = () => finish(false);
         const timer = setTimeout(closed, 60_000);
         this.sendWaiters.add(closed);
-        channel.bufferedAmountLowThreshold = 128 * 1024;
+        channel.bufferedAmountLowThreshold = FILE_BUFFER_LOW;
         channel.addEventListener("bufferedamountlow", drained, { once: true });
         channel.addEventListener("close", closed, { once: true });
         channel.addEventListener("error", closed, { once: true });
         signal.addEventListener("abort", closed, { once: true });
         if (signal.aborted || channel.readyState !== "open") closed();
-        else if (channel.bufferedAmount <= 128 * 1024) drained();
+        else if (channel.bufferedAmount <= FILE_BUFFER_LOW) drained();
       });
-      if (!ready) return false;
+      if (!ready || signal.aborted || this.dataChannel !== channel || channel.readyState !== "open") return false;
     }
     if (signal.aborted || this.dataChannel !== channel) return false;
     return this.send(data);

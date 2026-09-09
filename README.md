@@ -232,3 +232,17 @@ interrupt/reconnect and retry, and test a files-only start from Home. Verify
 360px, 768px and 1440px layouts and reduced motion. A live browser pass is required
 in addition to the automated tests; mocked transports do not establish WebRTC
 end-to-end readiness.
+
+### File transfer throughput
+
+The sender prepares up to four chunks concurrently (file reads and AES-GCM
+ encryption), then sends them in order. Preparation stays bounded and observes
+ cancellation and session replacement. The DataChannel file buffer pauses before
+ exceeding 1 MiB and resumes at 512 KiB; text sends can still enqueue while file
+ sending waits. Both send and receive progress notifications are coalesced to
+ 100 ms, while errors, cancellation and completed downloads update immediately.
+ The wire protocol and receiver acknowledgement requirements are unchanged.
+
+`src/lib/fileTransferSpeed.test.ts` checks bounded preparation, order, cancellation,
+ and an encrypted 4 MiB download against its SHA-256 hash. These automated tests
+ verify behavior, not achievable speed on a particular network.
