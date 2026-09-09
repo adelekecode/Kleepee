@@ -149,7 +149,7 @@ describe("bounded file preparation", () => {
       if (operation === "reset") expect(items(value)).toEqual([]);
       else
         expect(items(value)[0].status).toBe(
-          operation === "cancel" ? "cancelled" : "failed",
+          operation === "cancel" ? "cancelled" : "paused",
         );
     },
   );
@@ -249,7 +249,9 @@ describe("coalesced file progress", () => {
           data: new Uint8Array(1024),
         });
         value.handleFrame({ type: "file.complete", id: start.id });
-      } else if (terminal === "failed") value.connectionLost();
+      } else if (terminal === "failed") value.handleFrame({
+        type: "file.chunk", id: start.id, index: 999, data: new Uint8Array(1024),
+      });
       else if (terminal === "cancelled") value.cancel(start.id);
       else value.clear();
       expect(listener).toHaveBeenCalledTimes(3);

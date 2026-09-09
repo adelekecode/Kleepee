@@ -1,3 +1,4 @@
+import { backgroundTimeout } from "./backgroundTimeout";
 import {
   CHUNK_SIZE,
   isValidStartFrame,
@@ -26,12 +27,13 @@ export const PROGRESS_INTERVAL_MS = 100;
 interface Outgoing {
   file: File;
   controller: AbortController;
+  start?: FileStartFrame;
 }
 interface Incoming {
   start: FileStartFrame;
   chunks: Uint8Array[];
   bytes: number;
-  timer: ReturnType<typeof setTimeout>;
+  timer: () => void;
 }
 interface Snapshot {
   transfers: Map<string, FileTransfer>;
@@ -46,6 +48,9 @@ export class FileTransferManager {
   private queue: string[] = [];
   private transport: FileTransport | null = null;
   private pumping = false;
+  private peerBackground = false;
+  private resumeWaiters = new Map<string, { requestId: string; finish: (index: number) => void }>();
+  setPeerBackground(hidden: boolean) { this.peerBackground = hidden; }
   private progressTimer: ReturnType<typeof setTimeout> | null = null;
   private epoch = 0;
   private retainedReceiveBytes = 0;
@@ -69,7 +74,7 @@ export class FileTransferManager {
       transfers: new Map(
         values
           .filter((item) =>
-            ["queued", "sending", "receiving"].includes(item.status),
+            ["queued", "sending", "receiving", "paused"].includes(item.status),
           )
           .map((item) => [item.id, item]),
       ),
@@ -145,22 +150,40 @@ export class FileTransferManager {
     if (this.transport === transport) return;
     if (this.transport) this.connectionLost();
     this.transport = transport;
-    if (transport) void this.pump();
+    if (transport) {
+      for (const [id, item] of this.items) {
+        if (item.status === "paused" && this.outgoing.has(id)) {
+          const job = this.outgoing.get(id)!;
+          job.controller = new AbortController();
+          this.update(id, { status: "queued", error: undefined });
+          if (!this.queue.includes(id)) this.queue.push(id);
+        }
+      }
+      void this.pump();
+    }
   }
 
   connectionLost() {
     this.transport = null;
     for (const [id, item] of this.items) {
-      if (item.status === "sending")
-        this.failOutgoing(id, "Connection lost. Reconnect, then retry.");
+      if (item.status === "sending" || (item.status === "queued" && this.outgoing.get(id)?.start)) {
+        this.outgoing.get(id)?.controller.abort();
+        this.acknowledgements.get(id)?.(false);
+        this.resumeWaiters.get(id)?.finish(-1);
+        this.update(id, { status: "paused", error: "Waiting for the connection to return.", canRetry: false });
+      }
     }
-    for (const id of this.incoming.keys())
-      this.failIncoming(id, "Connection lost. Ask the sender to retry.", false);
+    for (const [id, entry] of this.incoming) {
+      entry.timer();
+      entry.timer = backgroundTimeout(() => this.failIncoming(id, "Transfer expired. Ask the sender to retry.", false), 15 * 60_000, () => this.peerBackground);
+      this.update(id, { status: "paused", error: "Waiting for the sender to reconnect." });
+    }
   }
 
   private failOutgoing(id: string, error: string) {
     this.outgoing.get(id)?.controller.abort();
     this.acknowledgements.get(id)?.(false);
+    this.resumeWaiters.get(id)?.finish(-1);
     this.update(id, {
       status: "failed",
       error,
@@ -187,7 +210,7 @@ export class FileTransferManager {
 
   private async sendFile(id: string, job: Outgoing, transport: FileTransport) {
     const signal = job.controller.signal;
-    const chunkSize = Math.min(CHUNK_SIZE, transport.chunkSize);
+    const chunkSize = Math.min(job.start?.chunkSize ?? CHUNK_SIZE, transport.chunkSize);
     const totalChunks = planChunks(job.file, chunkSize);
     const item = this.items.get(id)!;
     const active = () =>
@@ -209,7 +232,7 @@ export class FileTransferManager {
     try {
       if (!Number.isInteger(chunkSize) || chunkSize < 1024)
         throw new Error("Connection cannot carry file chunks.");
-      await send({
+      const start: FileStartFrame = {
         type: "file.start",
         id,
         senderId: item.senderId,
@@ -220,7 +243,13 @@ export class FileTransferManager {
         mimeType: item.mimeType,
         totalChunks,
         chunkSize,
-      });
+      };
+      const resuming = !!job.start;
+      job.start = start;
+      let offset = 0;
+      if (resuming) offset = await this.resume(start, transport, signal);
+      else await send(start);
+      if (!active()) return;
       // Bound file reads and encryption to four chunks, overlapping preparation
       // with network drain. Every promise handles rejection immediately so a
       // cancelled future chunk cannot create an unhandled rejection.
@@ -240,7 +269,7 @@ export class FileTransferManager {
         }
       };
       const pending: Promise<Preparation>[] = [];
-      let next = 0;
+      let next = offset;
       const fill = () => {
         while (
           pending.length < PREPARE_WINDOW &&
@@ -250,7 +279,7 @@ export class FileTransferManager {
           pending.push(prepare(next++));
       };
       fill();
-      for (let index = 0; index < totalChunks; index++) {
+      for (let index = offset; index < totalChunks; index++) {
         const prepared = await pending.shift()!;
         if (!active()) return;
         if ("error" in prepared) throw prepared.error;
@@ -264,22 +293,13 @@ export class FileTransferManager {
         );
         fill();
       }
-      let timer: ReturnType<typeof setTimeout>;
-      const acknowledgement = new Promise<boolean>((resolve) => {
-        const finish = (ok: boolean) => {
-          clearTimeout(timer);
-          this.acknowledgements.delete(id);
-          resolve(ok);
-        };
-        this.acknowledgements.set(id, finish);
-        timer = setTimeout(() => finish(false), TRANSFER_TIMEOUT_MS);
-      });
-      try {
-        await send({ type: "file.complete", id });
-        if (!(await acknowledgement))
+      const confirmed = await this.confirm(id, send);
+      if (!active()) return;
+      if (!confirmed) {
+        // A lost final acknowledgement must not duplicate the download.
+        const nextIndex = await this.resume(start, transport, signal);
+        if (nextIndex !== totalChunks || !(await this.confirm(id, send)))
           throw new Error("Delivery was not confirmed. Retry the file.");
-      } finally {
-        this.acknowledgements.get(id)?.(false);
       }
       if (!active()) return;
       this.outgoing.delete(id);
@@ -292,6 +312,49 @@ export class FileTransferManager {
         error instanceof Error ? error.message : "File transfer failed.",
       );
     }
+  }
+
+  private async confirm(id: string, send: (frame: FileFrame) => Promise<void>) {
+    let cancelTimer = () => {};
+    const acknowledgement = new Promise<boolean>((resolve) => {
+      const finish = (ok: boolean) => {
+        cancelTimer();
+        this.acknowledgements.delete(id);
+        resolve(ok);
+      };
+      this.acknowledgements.set(id, finish);
+      cancelTimer = backgroundTimeout(() => finish(false), TRANSFER_TIMEOUT_MS, () => this.peerBackground);
+    });
+    try {
+      await send({ type: "file.complete", id });
+      return await acknowledgement;
+    } finally { this.acknowledgements.get(id)?.(false); }
+  }
+
+  private async resume(start: FileStartFrame, transport: FileTransport, signal: AbortSignal) {
+    const requestId = crypto.randomUUID();
+    let cancelTimer = () => {};
+    const ready = new Promise<number>((resolve) => {
+      const finish = (index: number) => {
+        cancelTimer();
+        signal.removeEventListener("abort", abort);
+        this.resumeWaiters.delete(start.id);
+        resolve(index);
+      };
+      const abort = () => finish(-1);
+      this.resumeWaiters.set(start.id, { requestId, finish });
+      signal.addEventListener("abort", abort, { once: true });
+      cancelTimer = backgroundTimeout(() => finish(-1), TRANSFER_TIMEOUT_MS, () => this.peerBackground);
+      if (signal.aborted) finish(-1);
+    });
+    try {
+      if (signal.aborted || !(await transport.send({ ...start, type: "file.resume", requestId }, signal)))
+        throw new Error("Could not resume file transfer.");
+      const index = await ready;
+      if (!Number.isSafeInteger(index) || index < 0 || index > start.totalChunks)
+        throw new Error("Could not resume file transfer. Retry the file.");
+      return index;
+    } finally { this.resumeWaiters.get(start.id)?.finish(-1); }
   }
 
   retry = (id: string): boolean => {
@@ -317,6 +380,7 @@ export class FileTransferManager {
     this.control({ type: "file.cancel", id });
     this.outgoing.get(id)?.controller.abort();
     this.outgoing.delete(id);
+    this.resumeWaiters.get(id)?.finish(-1);
     this.acknowledgements.get(id)?.(false);
     this.releaseIncoming(id);
     this.update(id, { status: "cancelled", canRetry: false, error: undefined });
@@ -331,7 +395,7 @@ export class FileTransferManager {
   private releaseIncoming(id: string, keepBytes = false) {
     const entry = this.incoming.get(id);
     if (!entry) return;
-    clearTimeout(entry.timer);
+    entry.timer();
     if (!keepBytes) this.retainedReceiveBytes -= entry.start.fileSize;
     this.incoming.delete(id);
   }
@@ -341,10 +405,11 @@ export class FileTransferManager {
     if (notify) this.control({ type: "file.reject", id });
   }
   private receiveDeadline(id: string) {
-    return setTimeout(
+    return backgroundTimeout(
       () =>
         this.failIncoming(id, "Transfer timed out. Ask the sender to retry."),
       TRANSFER_TIMEOUT_MS,
+      () => this.peerBackground,
     );
   }
 
@@ -353,6 +418,50 @@ export class FileTransferManager {
     const frame = value as FileFrame;
     const id = frame.id;
     if (!validFileId(frame.id)) return;
+    if (frame.type === "file.resume.ready") {
+      const waiter = this.resumeWaiters.get(id);
+      if (waiter?.requestId === frame.requestId) waiter.finish(frame.nextIndex);
+      return;
+    }
+    if (frame.type === "file.resume") {
+      const start: FileStartFrame = { ...frame, type: "file.start" };
+      const existing = this.items.get(id);
+      if (!validFileId(frame.requestId) || !isValidStartFrame(start) || this.outgoing.has(id)) {
+        this.control({ type: "file.reject", id });
+        return;
+      }
+      if (existing) {
+        const matching = existing.senderId === frame.senderId && existing.senderName === frame.senderName &&
+          existing.fileName === frame.fileName && existing.fileSize === frame.fileSize &&
+          existing.mimeType === frame.mimeType && existing.timestamp === frame.timestamp;
+        if (!matching || ["failed", "cancelled"].includes(existing.status)) {
+          this.control({ type: "file.reject", id });
+          return;
+        }
+        if (existing.status === "complete") {
+          this.control({ type: "file.resume.ready", id, requestId: frame.requestId, nextIndex: frame.totalChunks });
+          return;
+        }
+        const entry = this.incoming.get(id);
+        if (!entry) { this.control({ type: "file.reject", id }); return; }
+        entry.timer();
+        if (entry.start.chunkSize !== frame.chunkSize) {
+          entry.chunks = [];
+          entry.bytes = 0;
+        }
+        entry.start = start;
+        entry.timer = this.receiveDeadline(id);
+        this.update(id, { status: "receiving", totalChunks: start.totalChunks, receivedChunks: entry.chunks.length,
+          progress: start.fileSize ? entry.bytes / start.fileSize : 0, error: undefined });
+      } else this.handleFrame(start);
+      const entry = this.incoming.get(id);
+      if (entry) this.control({ type: "file.resume.ready", id, requestId: frame.requestId, nextIndex: entry.chunks.length });
+      return;
+    }
+    if (frame.type === "file.complete" && this.items.get(id)?.status === "complete" && !this.outgoing.has(id)) {
+      this.control({ type: "file.ack", id });
+      return;
+    }
     if (frame.type === "file.start") {
       if (this.items.size >= 1000) {
         this.control({ type: "file.reject", id });
@@ -403,11 +512,12 @@ export class FileTransferManager {
     }
     if (frame.type === "file.cancel" || frame.type === "file.reject") {
       const item = this.items.get(frame.id);
-      if (!item || !["sending", "receiving", "queued"].includes(item.status))
+      if (!item || !["sending", "receiving", "queued", "paused"].includes(item.status))
         return;
       const rejected = frame.type === "file.reject";
       this.outgoing.get(frame.id)?.controller.abort();
       this.acknowledgements.get(frame.id)?.(false);
+      this.resumeWaiters.get(frame.id)?.finish(-1);
       this.releaseIncoming(frame.id);
       if (!rejected) this.outgoing.delete(frame.id);
       this.update(frame.id, {
@@ -439,7 +549,7 @@ export class FileTransferManager {
       }
       entry.chunks.push(frame.data);
       entry.bytes += frame.data.byteLength;
-      clearTimeout(entry.timer);
+      entry.timer();
       entry.timer = this.receiveDeadline(frame.id);
       this.update(
         frame.id,
@@ -486,10 +596,12 @@ export class FileTransferManager {
     this.epoch++;
     for (const job of this.outgoing.values()) job.controller.abort();
     for (const finish of this.acknowledgements.values()) finish(false);
-    for (const entry of this.incoming.values()) clearTimeout(entry.timer);
+    for (const waiter of this.resumeWaiters.values()) waiter.finish(-1);
+    for (const entry of this.incoming.values()) entry.timer();
     this.urls.forEach((url) => URL.revokeObjectURL(url));
     this.urls.clear();
     this.transport = null;
+    this.peerBackground = false;
     this.retainedReceiveBytes = 0;
     this.queue = [];
     this.incoming.clear();

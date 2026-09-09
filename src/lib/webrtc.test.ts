@@ -48,6 +48,7 @@ describe("WebRTC connection recovery", () => {
   let onStateChange: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     FakePeer.instances = [];
     vi.stubGlobal("RTCPeerConnection", FakePeer);
     onStateChange = vi.fn();
@@ -61,6 +62,7 @@ describe("WebRTC connection recovery", () => {
   });
   afterEach(() => {
     manager.close();
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -68,6 +70,58 @@ describe("WebRTC connection recovery", () => {
   it("reports a stalled handshake after 15 seconds", async () => {
     await manager.createOffer();
     await vi.advanceTimersByTimeAsync(15_000);
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("closed");
+  });
+
+  it("pauses handshake deadlines while hidden and gives foreground negotiation a full grace period", async () => {
+    await manager.createOffer();
+    await vi.advanceTimersByTimeAsync(10_000);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(onStateChange).not.toHaveBeenCalled();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(onStateChange).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("closed");
+  });
+
+  it("does not expire a handshake while its peer is backgrounded", async () => {
+    await manager.createOffer();
+    manager.setPeerBackground(true);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(onStateChange).not.toHaveBeenCalled();
+    manager.setPeerBackground(false);
+    const channel = FakePeer.instances[0].channel;
+    channel.readyState = "open";
+    channel.onopen?.();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("open");
+  });
+
+  it("rechecks a recovered connection without replacing its open data channel", async () => {
+    await manager.createOffer();
+    const pc = FakePeer.instances[0];
+    pc.channel.readyState = "open";
+    pc.channel.onopen?.();
+    pc.connectionState = "connected";
+    manager.recover();
+    expect(pc.close).not.toHaveBeenCalled();
+    expect(manager.send(new Uint8Array([42]))).toBe(true);
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith("open");
+  });
+
+  it("reports a closed data channel discovered after foregrounding", async () => {
+    await manager.createOffer();
+    FakePeer.instances[0].channel.readyState = "closed";
+    manager.recover();
+    manager.recover();
     expect(onStateChange).toHaveBeenCalledTimes(1);
     expect(onStateChange).toHaveBeenCalledWith("closed");
   });
@@ -229,6 +283,36 @@ describe("WebRTC connection recovery", () => {
       expect(channel.send).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["local", "peer"])("keeps a blocked file send alive while the %s browser is backgrounded", async (side) => {
+    await manager.createOffer();
+    const channel = FakePeer.instances[0].channel;
+    channel.readyState = "open";
+    channel.onopen?.();
+    channel.bufferedAmount = 2 * 1024 * 1024;
+    if (side === "local") {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else manager.setPeerBackground(true);
+    const resolved = vi.fn();
+    const pending = manager.sendBuffered(new Uint8Array([7]), new AbortController().signal).then((value) => {
+      resolved(value);
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(resolved).not.toHaveBeenCalled();
+    expect(channel.send).not.toHaveBeenCalled();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    manager.setPeerBackground(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(resolved).not.toHaveBeenCalled();
+    channel.bufferedAmount = 0;
+    channel.dispatchEvent(new Event("bufferedamountlow"));
+    await expect(pending).resolves.toBe(true);
+    expect(channel.send).toHaveBeenCalledTimes(1);
+    expect(channel.send).toHaveBeenCalledWith(new Uint8Array([7]));
+  });
 
   it("times out a buffer which never drains", async () => {
     await manager.createOffer();

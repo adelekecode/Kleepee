@@ -1,5 +1,6 @@
 export type FileTransferStatus =
   | "queued"
+  | "paused"
   | "sending"
   | "receiving"
   | "complete"
@@ -48,6 +49,8 @@ export interface FileChunkFrame {
 }
 export type FileFrame =
   | FileStartFrame
+  | (Omit<FileStartFrame, "type"> & { type: "file.resume"; requestId: string })
+  | { type: "file.resume.ready"; id: string; requestId: string; nextIndex: number }
   | FileChunkFrame
   | {
       type: "file.complete" | "file.cancel" | "file.ack" | "file.reject";

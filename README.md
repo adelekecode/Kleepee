@@ -262,3 +262,65 @@ can still populate Recent sessions (including the join secret and text preview);
 Reset app and the list's Clear all action remove the saved history. Only sessions
 that actually connected are recorded. Reset is local: it does not revoke a join
 link, delete the server's session, or erase copies on another device.
+
+### Minimized tabs and background recovery
+
+An open WebRTC DataChannel now survives a signaling WebSocket interruption.
+Signaling reconnects separately; peer leave/join notifications from signaling
+alone do not close a working text/file channel. Actual WebRTC failures still
+trigger reconnection. Returning to the page, restoring it from the back/forward
+cache, or coming online checks connectivity without replacing a healthy channel.
+
+Encrypted presence messages let the other device know the page is backgrounded.
+Inactivity deadlines pause while the local page is hidden/frozen or the peer is
+known to be hidden, and grant a fresh grace interval on resume. Presence is best
+effort, never a reason by itself to disconnect. File buffering remains bounded.
+
+Interrupted file transfers keep received chunks in memory and negotiate the next
+chunk on reconnection. Partial receives expire after 15 minutes of foreground
+waiting (with the same background-aware deadline). A receiver that refreshed starts from zero. If a changed
+message-size limit requires smaller chunks, the transfer restarts safely. Final
+acknowledgement recovery does not create duplicate downloads. Explicit Cancel,
+End session, and Reset do not automatically resume canceled transfers. Both
+browsers must have the updated frontend to use the new file resume frames.
+
+During a visible active file transfer, a supported browser is asked for a screen
+wake lock. It is released when the transfer stops or the page is hidden and
+reacquired when appropriate. This does not grant background execution. Browsers
+and operating systems may freeze, discard, or terminate minimized pages,
+especially on mobile; no web-only implementation can guarantee an uninterrupted
+connection after that. Automatic recovery needs the tab and its in-memory state
+to remain alive. Closing/reloading a tab still loses its temporary file data.
+
+Validate on desktop and mobile: exchange text, minimize either peer for at least
+two minutes, foreground it and send in both directions; repeat during a file
+transfer and verify the downloaded hash. Also test screen lock, network changes,
+and cancellation/reset during recovery. Synthetic lifecycle tests cover the
+state logic but cannot establish a device's real background-execution policy.
+
+### Install as an app (PWA)
+
+The production frontend includes a web app manifest, 192px/512px app icons,
+Apple home-screen metadata, an Install app control, and an offline app shell.
+On Chromium desktop/Android, use Install app when the browser offers installation.
+On iPhone/iPad, open the site in Safari and choose Share → Add to Home Screen.
+On Safari for Mac, use Add to Dock. Availability depends on the browser.
+
+Build with `npm run build` and deploy `dist` to Pages as usual. No Worker changes
+or additional packages are required. To check PWA behavior locally, use
+`npm run preview -- --host 127.0.0.1 --port 4173`; service worker registration is
+production-only so `npm run dev` stays free of stale app caches. Localhost works;
+a phone opening a LAN IP needs HTTPS to install/use the service worker, so use
+the HTTPS Pages deployment for mobile checks.
+
+The service worker caches only public application assets. It never caches
+signaling/API responses, join URLs, session secrets, messages, or file data.
+Offline loading opens the interface; starting a session still needs the signaling
+server, and sending needs a working peer connection. New service worker versions
+wait for existing app windows/tabs to close; they never force a session reload.
+Reset app still clears session data, while retaining these public app assets.
+
+Installation does not grant indefinite background execution or move WebRTC into
+the service worker. The same OS suspension limits apply to installed web apps.
+Verify installation/standalone launch, offline shell loading after first use,
+deep links, and updating while another tab has an active session on real devices.

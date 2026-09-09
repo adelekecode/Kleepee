@@ -327,7 +327,7 @@ describe("incoming validation and cancellation", () => {
 });
 
 describe("connection lifecycle and cleanup", () => {
-  it("fails interrupted transfers and retries under a fresh ID after reconnect", async () => {
+  it("resumes an interrupted acknowledgement under the same ID after reconnect", async () => {
     const a = manager();
     const b = manager();
     const frames: FileFrame[] = [];
@@ -344,27 +344,26 @@ describe("connection lifecycle and cleanup", () => {
     await flush();
     const oldId = items(a)[0].id;
     a.setTransport(null);
-    expect(item(a, oldId)).toMatchObject({ status: "failed", canRetry: true });
+    expect(item(a, oldId)).toMatchObject({ status: "paused", canRetry: false });
     expect(a.retry(oldId)).toBe(false);
     connect(a, b);
-    expect(a.retry(oldId)).toBe(true);
-    a.handleFrame({ type: "file.ack", id: oldId });
+    expect(a.retry(oldId)).toBe(false);
     await vi.waitFor(() => expect(items(a)[0]?.status).toBe("complete"));
-    expect(items(a)[0].id).not.toBe(oldId);
+    expect(items(a)[0].id).toBe(oldId);
+    expect(items(b)).toHaveLength(1);
   });
 
-  it("releases an incomplete receive on connection loss", () => {
+  it("retains an incomplete receive on connection loss", () => {
     const { value } = receiver();
     value.handleFrame(start());
     value.setTransport(null);
     expect(item(value, "incoming-1")).toMatchObject({
-      status: "failed",
-      canRetry: false,
+      status: "paused",
     });
     expect(item(value, "incoming-1")?.objectUrl).toBeUndefined();
     value.setTransport(recordingTransport());
-    value.handleFrame(start({ id: "new-transfer" }));
-    expect(item(value, "new-transfer")?.status).toBe("receiving");
+    value.handleFrame({ ...start(), type: "file.resume", requestId: "resume-1" });
+    expect(item(value, "incoming-1")?.status).toBe("receiving");
   });
 
   it("times out missing chunks and unacknowledged sends", async () => {
@@ -373,7 +372,7 @@ describe("connection lifecycle and cleanup", () => {
     value.handleFrame(start());
     value.enqueue([new File([], "no-ack")], device);
     await flush();
-    await vi.advanceTimersByTimeAsync(TRANSFER_TIMEOUT_MS + 1);
+    await vi.advanceTimersByTimeAsync(2 * TRANSFER_TIMEOUT_MS + 1);
     expect(items(value)).toHaveLength(2);
     expect(items(value).every((entry) => entry.status === "failed")).toBe(true);
   });

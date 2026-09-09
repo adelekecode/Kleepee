@@ -1,4 +1,5 @@
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
+import { backgroundTimeout } from "../lib/backgroundTimeout";
 import { WebRTCManager } from "../lib/webrtc";
 import { createIceServerLoader } from "../lib/iceServers";
 import { deriveKey, encrypt, decryptBytes, encryptBytes, generateSessionSecret } from "../lib/crypto";
@@ -282,6 +283,7 @@ export interface UseSessionResult {
   sessionSecret: string | null;
   role: "initiator" | "joiner" | null;
   peerDeviceName: string | null;
+  peerBackground: boolean;
   items: TextItem[];
   initialText: string | null;
   error: SessionError | null;
@@ -365,6 +367,9 @@ export function useSession(): UseSessionResult {
 
   const wsRef = useRef<WebSocket | null>(null);
   const rtcRef = useRef<WebRTCManager | null>(null);
+  const signalingRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peerBackgroundRef = useRef(false);
+  const [peerBackground, setPeerBackground] = useState(false);
   const iceLoaderRef = useRef<{ key: string; load: () => Promise<RTCIceServer[]> } | null>(null);
   const cryptoKeyRef = useRef<CryptoKey | null>(null);
   const initialTextRef = useRef<string | null>(null);
@@ -381,7 +386,7 @@ export function useSession(): UseSessionResult {
   const intentionalCloseRef = useRef(false);
   const resumedRef = useRef(false);
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const joinOfferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const joinOfferTimerRef = useRef<(() => void) | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
   // Ref to always have the latest store snapshot for history recording without
   // creating stale closures inside imperative functions.
@@ -419,31 +424,45 @@ export function useSession(): UseSessionResult {
 
   function clearJoinOfferTimer() {
     if (joinOfferTimerRef.current) {
-      clearTimeout(joinOfferTimerRef.current);
+      joinOfferTimerRef.current();
       joinOfferTimerRef.current = null;
     }
   }
 
+  function sendPresence(background = document.visibilityState === "hidden") {
+    const manager = rtcRef.current;
+    const key = cryptoKeyRef.current;
+    const operationId = operationIdRef.current;
+    if (!manager || !key || manager.dataChannelState !== "open") return;
+    void encrypt(key, JSON.stringify({ type: "presence", hidden: background })).then((payload) => {
+      if (rtcRef.current === manager && operationIdRef.current === operationId) manager.send(payload);
+    }).catch(() => { /* Presence is best effort; no disconnect on a missed heartbeat. */ });
+  }
+
   function startHeartbeat() {
     clearHeartbeatTimer();
+    sendPresence();
+    heartbeatTimerRef.current = setInterval(() => sendPresence(), HEARTBEAT_INTERVAL_MS);
+  }
 
-    heartbeatTimerRef.current = setInterval(() => {
-      if (!cryptoKeyRef.current || !rtcRef.current || rtcRef.current.dataChannelState !== "open") {
-        return;
-      }
+  function clearSignalingRetry() {
+    if (signalingRetryRef.current !== null) clearTimeout(signalingRetryRef.current);
+    signalingRetryRef.current = null;
+  }
 
-      void encrypt(
-        cryptoKeyRef.current,
-        JSON.stringify({ type: "ping", timestamp: Date.now() }),
-      ).then((payload) => {
-        rtcRef.current?.send(payload);
-      }).catch(() => {
-        /* ignore heartbeat failures; normal reconnect handles channel close */
-      });
-    }, HEARTBEAT_INTERVAL_MS);
+  // Signaling only sets up WebRTC. Losing it must not tear down an open channel.
+  function reconnectSignaling() {
+    if (intentionalCloseRef.current || !sessionIdRef.current || signalingRetryRef.current !== null) return;
+    const operationId = operationIdRef.current;
+    signalingRetryRef.current = setTimeout(() => {
+      signalingRetryRef.current = null;
+      if (intentionalCloseRef.current || operationId !== operationIdRef.current || !sessionIdRef.current) return;
+      openWebSocket(sessionIdRef.current, operationId);
+    }, 2000);
   }
 
   function closeTransports(clearKey: boolean) {
+    clearSignalingRetry();
     clearRetryTimer();
     clearHeartbeatTimer();
     clearJoinOfferTimer();
@@ -583,7 +602,7 @@ export function useSession(): UseSessionResult {
 
   function startJoinOfferTimer(operationId: number, ws: WebSocket) {
     clearJoinOfferTimer();
-    joinOfferTimerRef.current = setTimeout(() => {
+    joinOfferTimerRef.current = backgroundTimeout(() => {
       joinOfferTimerRef.current = null;
       if (
         operationId !== operationIdRef.current ||
@@ -596,7 +615,7 @@ export function useSession(): UseSessionResult {
       }
 
       scheduleReconnect("network");
-    }, JOIN_OFFER_TIMEOUT_MS);
+    }, JOIN_OFFER_TIMEOUT_MS, () => peerBackgroundRef.current);
   }
 
   function setupWebRTC(operationId = operationIdRef.current): WebRTCManager {
@@ -635,6 +654,15 @@ export function useSession(): UseSessionResult {
             return;
           }
           const parsed = JSON.parse(new TextDecoder().decode(plain)) as unknown;
+          if (parsed && typeof parsed === "object" && (parsed as { type?: unknown }).type === "presence") {
+            const hidden = (parsed as { hidden?: unknown }).hidden;
+            if (typeof hidden === "boolean") {
+              peerBackgroundRef.current = hidden;
+              setPeerBackground(hidden);
+              manager.setPeerBackground(hidden);
+            }
+            return;
+          }
 
           if (
             parsed &&
@@ -700,13 +728,21 @@ export function useSession(): UseSessionResult {
       },
     });
 
+    manager.setPeerBackground(peerBackgroundRef.current);
     rtcRef.current = manager;
     return manager;
   }
 
   function openWebSocket(sessionId: string, operationId = operationIdRef.current) {
+    clearSignalingRetry();
     try {
-      wsRef.current?.close();
+      if (wsRef.current) {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.close();
+      }
     } catch {
       /* ignore */
     }
@@ -720,7 +756,7 @@ export function useSession(): UseSessionResult {
     let messageQueue = Promise.resolve();
     ws.onopen = () => {
       if (operationId !== operationIdRef.current || wsRef.current !== ws) return;
-      if (roleRef.current === "joiner") startJoinOfferTimer(operationId, ws);
+      if (roleRef.current === "joiner" && rtcRef.current?.dataChannelState !== "open") startJoinOfferTimer(operationId, ws);
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -741,6 +777,11 @@ export function useSession(): UseSessionResult {
       try {
         switch (message.type) {
           case "peer.join": {
+            dispatch({ type: "PEER_JOINED", peerDeviceName: message.deviceName });
+            if (rtcRef.current?.dataChannelState === "open") {
+              sendPresence();
+              break;
+            }
             clearRetryTimer();
             const rtc = setupWebRTC(operationId);
             dispatch({ type: "PEER_JOINED", peerDeviceName: message.deviceName });
@@ -756,6 +797,12 @@ export function useSession(): UseSessionResult {
           }
           case "signal.offer": {
             if (roleRef.current === "joiner") {
+              // An explicit offer means the other peer really needs a new channel.
+              if (rtcRef.current?.dataChannelState === "open") {
+                dataChannelStateRef.current = null;
+                dispatch({ type: "CHANNEL_STATE", dataChannelState: null });
+                setupWebRTC(operationId);
+              }
               clearJoinOfferTimer();
               clearRetryTimer();
               const rtc = rtcRef.current ?? setupWebRTC(operationId);
@@ -785,6 +832,9 @@ export function useSession(): UseSessionResult {
             break;
           }
           case "peer.leave": {
+            // The signaling socket can disappear while SCTP keeps transferring.
+            // Let WebRTC's actual connection events determine data connectivity.
+            if (rtcRef.current?.dataChannelState === "open") break;
             clearRetryTimer();
             clearHeartbeatTimer();
             clearJoinOfferTimer();
@@ -805,7 +855,8 @@ export function useSession(): UseSessionResult {
     ws.onerror = () => {
       if (operationId !== operationIdRef.current || wsRef.current !== ws) return;
       clearJoinOfferTimer();
-      scheduleReconnect("network");
+      if (rtcRef.current?.dataChannelState === "open") reconnectSignaling();
+      else scheduleReconnect("network");
     };
 
     ws.onclose = (event: CloseEvent) => {
@@ -827,7 +878,8 @@ export function useSession(): UseSessionResult {
         return;
       }
 
-      scheduleReconnect("network");
+      if (rtcRef.current?.dataChannelState === "open") reconnectSignaling();
+      else scheduleReconnect("network");
     };
   }
 
@@ -911,6 +963,8 @@ export function useSession(): UseSessionResult {
       roleRef.current = "initiator";
       sessionStartedAtRef.current = null;
       historySuppressedRef.current = false;
+      peerBackgroundRef.current = false;
+      setPeerBackground(false);
 
       dispatch({ type: "SESSION_CREATED", sessionId, sessionSecret, initialText });
       setupWebRTC(operationId);
@@ -950,6 +1004,8 @@ export function useSession(): UseSessionResult {
     roleRef.current = "joiner";
     sessionStartedAtRef.current = null;
     historySuppressedRef.current = false;
+    peerBackgroundRef.current = false;
+    setPeerBackground(false);
     dispatch({ type: "SESSION_JOINED", sessionId, sessionSecret });
     dispatch({ type: "PENDING", isPending: true });
 
@@ -1051,6 +1107,8 @@ export function useSession(): UseSessionResult {
   function reset() {
     // Forget means forget: beforeunload/cleanup can run before React commits RESET.
     historySuppressedRef.current = true;
+    peerBackgroundRef.current = false;
+    setPeerBackground(false);
     storeRef.current = emptyStore;
     sessionStartedAtRef.current = null;
     operationIdRef.current += 1;
@@ -1109,9 +1167,39 @@ export function useSession(): UseSessionResult {
     function handleUnload() {
       saveToHistory();
     }
+    function recoverForeground() {
+      if (document.visibilityState === "hidden" || intentionalCloseRef.current || !sessionIdRef.current) return;
+      sendPresence();
+      rtcRef.current?.recover();
+      if (rtcRef.current?.dataChannelState === "open") {
+        if (!wsRef.current || wsRef.current.readyState >= WebSocket.CLOSING) reconnectSignaling();
+        return;
+      }
+      if (retryTimerRef.current) return;
+      if (!wsRef.current || wsRef.current.readyState >= WebSocket.CLOSING) scheduleReconnect("network");
+      else if (roleRef.current === "joiner") startJoinOfferTimer(operationIdRef.current, wsRef.current);
+      else scheduleRTCReconnect();
+    }
+    function visibilityChanged() {
+      if (document.visibilityState === "hidden") sendPresence();
+      else recoverForeground();
+    }
+    function suspending() { sendPresence(true); }
+    document.addEventListener("freeze", suspending);
+    window.addEventListener("pagehide", suspending);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    document.addEventListener("resume", recoverForeground);
+    window.addEventListener("pageshow", recoverForeground);
+    window.addEventListener("online", recoverForeground);
     window.addEventListener("beforeunload", handleUnload);
 
     return () => {
+      document.removeEventListener("freeze", suspending);
+      window.removeEventListener("pagehide", suspending);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      document.removeEventListener("resume", recoverForeground);
+      window.removeEventListener("pageshow", recoverForeground);
+      window.removeEventListener("online", recoverForeground);
       window.removeEventListener("beforeunload", handleUnload);
       saveToHistory();
       operationIdRef.current += 1;
@@ -1128,6 +1216,7 @@ export function useSession(): UseSessionResult {
     sessionSecret: store.sessionSecret,
     role: store.role,
     peerDeviceName: store.peerDeviceName,
+    peerBackground,
     items: store.items,
     initialText: store.initialText,
     error: store.error,
