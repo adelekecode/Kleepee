@@ -42,6 +42,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   } = useFileTransfer();
 
   useEffect(() => {
+    files.setPeerBackground(session.peerBackground);
+  }, [files, session.peerBackground]);
+
+  useEffect(() => {
     session.setFileFrameHandler((frame) => {
       files.setTransport(session.getFileTransport());
       files.handleFrame(frame);
@@ -68,6 +72,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     session.reset();
   }
   function disconnect() {
+    for (const id of files.getSnapshot().transfers.keys()) files.cancel(id);
     files.connectionLost();
     session.disconnect();
   }

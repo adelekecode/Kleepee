@@ -8,6 +8,7 @@ const cryptoMocks = vi.hoisted(() => ({
   deriveKey: vi.fn(),
   encrypt: vi.fn(),
   decrypt: vi.fn(),
+  decryptBytes: vi.fn(),
   generateSessionSecret: vi.fn(),
 }));
 
@@ -19,6 +20,8 @@ const rtcMocks = vi.hoisted(() => ({
     handleAnswer: ReturnType<typeof vi.fn>;
     addIceCandidate: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
+    recover: ReturnType<typeof vi.fn>;
+    setPeerBackground: ReturnType<typeof vi.fn>;
     dataChannelState: RTCDataChannelState | null;
     callbacks: WebRTCCallbacks;
   }>,
@@ -28,6 +31,7 @@ vi.mock("../lib/crypto", () => ({
   deriveKey: cryptoMocks.deriveKey,
   encrypt: cryptoMocks.encrypt,
   decrypt: cryptoMocks.decrypt,
+  decryptBytes: cryptoMocks.decryptBytes,
   generateSessionSecret: cryptoMocks.generateSessionSecret,
 }));
 
@@ -39,6 +43,8 @@ vi.mock("../lib/webrtc", () => ({
     handleAnswer = vi.fn(async () => {});
     addIceCandidate = vi.fn(async () => {});
     send = vi.fn(() => true);
+    recover = vi.fn();
+    setPeerBackground = vi.fn();
     dataChannelState: RTCDataChannelState | null = null;
 
     constructor(_servers: unknown, readonly callbacks: WebRTCCallbacks) {
@@ -110,6 +116,7 @@ describe("useSession join recovery", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     window.sessionStorage.clear();
     window.localStorage.clear();
@@ -117,6 +124,7 @@ describe("useSession join recovery", () => {
     cryptoMocks.deriveKey.mockResolvedValue({} as CryptoKey);
     cryptoMocks.encrypt.mockResolvedValue(new Uint8Array([1]));
     cryptoMocks.decrypt.mockResolvedValue("{}");
+    cryptoMocks.decryptBytes.mockResolvedValue(new TextEncoder().encode("{}"));
     cryptoMocks.generateSessionSecret.mockReturnValue("secret");
     rtcMocks.instances.length = 0;
     FakeWebSocket.instances = [];
@@ -153,6 +161,101 @@ describe("useSession join recovery", () => {
     expect(hook.current.items).toHaveLength(1);
     expect(window.sessionStorage.getItem("kleepee.session.current")).not.toBeNull();
   }
+
+  it("keeps an open data channel connected while the page is hidden", async () => {
+    await connectWithText();
+    const rtc = rtcMocks.instances[0];
+    await act(async () => {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(hook!.current.state).toBe("CONNECTED");
+    expect(rtc.close).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(cryptoMocks.encrypt).toHaveBeenCalledWith(expect.anything(), JSON.stringify({ type: "presence", hidden: true }));
+  });
+
+  it.each(["close", "error"])("repairs signaling after websocket %s without interrupting text", async (event) => {
+    await connectWithText();
+    const rtc = rtcMocks.instances[0];
+    const ws = FakeWebSocket.instances[0];
+    await act(async () => {
+      if (event === "close") {
+        ws.readyState = FakeWebSocket.CLOSED;
+        ws.onclose?.({ code: 1006 } as CloseEvent);
+      } else ws.onerror?.();
+      expect(await hook!.current.sendText("Still connected", "Second Device", "device-2")).toEqual({ ok: true });
+    });
+    expect(hook!.current.state).toBe("CONNECTED");
+    expect(hook!.current.items.at(-1)?.content).toBe("Still connected");
+    expect(rtc.close).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rtcMocks.instances).toHaveLength(1);
+    expect(rtc.close).not.toHaveBeenCalled();
+    expect(hook!.current.state).toBe("CONNECTED");
+  });
+
+  it("ignores signaling peer leave/join churn while the data channel is open", async () => {
+    await connectWithText();
+    const rtc = rtcMocks.instances[0];
+    await act(async () => {
+      FakeWebSocket.instances[0].onmessage?.({ data: JSON.stringify({ type: "peer.leave" }) } as MessageEvent);
+      FakeWebSocket.instances[0].onmessage?.({ data: JSON.stringify({ type: "peer.join", deviceName: "Returned Device" }) } as MessageEvent);
+    });
+    expect(hook!.current.state).toBe("CONNECTED");
+    expect(hook!.current.peerDeviceName).toBe("Returned Device");
+    expect(rtcMocks.instances).toHaveLength(1);
+    expect(rtc.close).not.toHaveBeenCalled();
+    expect(rtc.createOffer).not.toHaveBeenCalled();
+  });
+
+  it.each(["reset", "disconnect"] as const)("never reconnects a manually %s session on foreground or online events", async (action) => {
+    await connectWithText();
+    const rtc = rtcMocks.instances[0];
+    await act(async () => {
+      hook!.current[action]();
+      document.dispatchEvent(new Event("visibilitychange"));
+      document.dispatchEvent(new Event("resume"));
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rtcMocks.instances).toHaveLength(1);
+    expect(rtc.recover).not.toHaveBeenCalled();
+    expect(hook!.current.state).not.toBe("CONNECTED");
+  });
+
+  it("repairs only closed signaling when an open data channel returns to foreground", async () => {
+    await connectWithText();
+    const rtc = rtcMocks.instances[0];
+    FakeWebSocket.instances[0].readyState = FakeWebSocket.CLOSED;
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(rtc.recover).toHaveBeenCalled();
+    expect(rtc.close).not.toHaveBeenCalled();
+    expect(rtcMocks.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(hook!.current.state).toBe("CONNECTED");
+  });
+
+  it("uses encrypted peer presence to suspend peer deadlines without adding feed items", async () => {
+    await connectWithText();
+    const rtc = rtcMocks.instances[0];
+    for (const hidden of [true, false]) {
+      cryptoMocks.decryptBytes.mockResolvedValueOnce(new TextEncoder().encode(JSON.stringify({ type: "presence", hidden })));
+      await act(async () => { rtc.callbacks.onMessage(new Uint8Array([5])); });
+      expect(hook!.current.peerBackground).toBe(hidden);
+      expect(rtc.setPeerBackground).toHaveBeenLastCalledWith(hidden);
+      expect(hook!.current.items).toHaveLength(1);
+      expect(hook!.current.state).toBe("CONNECTED");
+    }
+  });
 
   it("forgets a reset session even if beforeunload fires before React commits", async () => {
     await connectWithText();

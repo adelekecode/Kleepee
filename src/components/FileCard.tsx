@@ -19,7 +19,8 @@ export function FileCard({ item, onCancel, onRetry }: FileCardProps) {
   const active =
     item.status === "queued" ||
     item.status === "sending" ||
-    item.status === "receiving";
+    item.status === "receiving" ||
+    item.status === "paused";
   const pct = Math.max(
     0,
     Math.min(100, Math.round((item.progress ?? 0) * 100)),
@@ -28,6 +29,7 @@ export function FileCard({ item, onCancel, onRetry }: FileCardProps) {
     queued: "Queued",
     sending: pct === 100 ? "Confirming delivery…" : "Sending",
     receiving: "Receiving",
+    paused: "Paused — reconnecting",
     complete: "Complete",
     failed: "Transfer failed",
     cancelled: "Cancelled",
@@ -124,7 +126,7 @@ export function FileCard({ item, onCancel, onRetry }: FileCardProps) {
         </div>
       </div>
       {item.error && (
-        <p className="mt-2 text-sm leading-6 text-kleepee-danger">
+        <p className={`mt-2 text-sm leading-6 ${item.status === "paused" ? "text-kleepee-muted" : "text-kleepee-danger"}`}>
           {item.error}
         </p>
       )}

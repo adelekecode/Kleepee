@@ -6,6 +6,7 @@ import { Composer, type ComposerResult } from "../components/Composer";
 import { MessageToast } from "../components/MessageToast";
 import { useSessionContext } from "../context/SessionContext";
 import { useNotifications } from "../hooks/useNotifications";
+import { useTransferWakeLock } from "../hooks/useTransferWakeLock";
 import type { FeedItem } from "../types";
 
 export function ConnectedPage() {
@@ -46,6 +47,15 @@ export function ConnectedPage() {
 
   const prevItemCountRef = useRef(items.length + fileItems.length);
   const [dropError, setDropError] = useState<string | null>(null);
+  const liveTransfers = [...fileTransfers.values()];
+  const transferring = liveTransfers.some(
+    (transfer) =>
+      transfer.status === "sending" || transfer.status === "receiving",
+  );
+  const pausedTransfers = liveTransfers.some(
+    (transfer) => transfer.status === "paused",
+  );
+  useTransferWakeLock(transferring);
 
   // Notify on new incoming items (text or file)
   useEffect(() => {
@@ -203,6 +213,13 @@ export function ConnectedPage() {
           setDropError(result.errors.length ? result.errors.join(" ") : null);
         }}
       />
+
+      {(transferring || pausedTransfers) && (
+        <p className="text-xs leading-5 text-kleepee-muted">
+          Transfers continue while your browser allows it. If your device pauses
+          this tab, return here to reconnect and continue. Keep both tabs open.
+        </p>
+      )}
 
       <Composer
         disabled={!canSend}

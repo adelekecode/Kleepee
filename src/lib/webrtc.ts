@@ -1,6 +1,8 @@
 export const FILE_BUFFER_HIGH = 1024 * 1024;
 export const FILE_BUFFER_LOW = 512 * 1024;
 
+import { backgroundTimeout } from "./backgroundTimeout";
+
 import type { WebRTCCallbacks } from "../types/index";
 
 // Re-export WebRTCCallbacks so consumers can import it from this module
@@ -17,7 +19,8 @@ export class WebRTCManager {
   private iceServers: RTCIceServer[] | (() => Promise<RTCIceServer[]>);
   private generation = 0;
   private pendingIceCandidates: RTCIceCandidateInit[] = [];
-  private connectionTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectionTimer: (() => void) | null = null;
+  private peerBackground = false;
   private failureReported = false;
   private sendWaiters = new Set<() => void>();
 
@@ -69,13 +72,13 @@ export class WebRTCManager {
   }
 
   private clearConnectionTimer(): void {
-    if (this.connectionTimer !== null) clearTimeout(this.connectionTimer);
+    this.connectionTimer?.();
     this.connectionTimer = null;
   }
 
   private startConnectionTimer(): void {
     if (this.connectionTimer !== null) return;
-    this.connectionTimer = setTimeout(() => this.reportFailure(), 15_000);
+    this.connectionTimer = backgroundTimeout(() => this.reportFailure(), 15_000, () => this.peerBackground);
   }
 
   private reportFailure(): void {
@@ -222,7 +225,7 @@ export class WebRTCManager {
     ) {
       const ready = await new Promise<boolean>((resolve) => {
         const finish = (ok: boolean) => {
-          clearTimeout(timer);
+          cancelDeadline();
           this.sendWaiters.delete(closed);
           channel.removeEventListener("bufferedamountlow", drained);
           channel.removeEventListener("close", closed);
@@ -232,7 +235,7 @@ export class WebRTCManager {
         };
         const drained = () => finish(true);
         const closed = () => finish(false);
-        const timer = setTimeout(closed, 60_000);
+        const cancelDeadline = backgroundTimeout(closed, 60_000, () => this.peerBackground);
         this.sendWaiters.add(closed);
         channel.bufferedAmountLowThreshold = FILE_BUFFER_LOW;
         channel.addEventListener("bufferedamountlow", drained, { once: true });
@@ -252,6 +255,21 @@ export class WebRTCManager {
     }
     if (signal.aborted || this.dataChannel !== channel) return false;
     return this.send(data);
+  }
+
+  setPeerBackground(hidden: boolean): void {
+    this.peerBackground = hidden;
+  }
+
+  /** Recheck after foregrounding; do not replace a healthy DataChannel. */
+  recover(): void {
+    if (!this.pc) return;
+    if (this.pc.connectionState === "failed" || this.dataChannel?.readyState === "closed") {
+      this.reportFailure();
+    } else if (this.pc.connectionState === "disconnected") {
+      this.clearConnectionTimer();
+      this.startConnectionTimer();
+    }
   }
 
   /**

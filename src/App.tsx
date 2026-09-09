@@ -5,6 +5,7 @@ import { ExpiredPage } from "./pages/ExpiredPage";
 import { HomePage } from "./pages/HomePage";
 import { JoinPage } from "./pages/JoinPage";
 import { WaitingPage } from "./pages/WaitingPage";
+import { InstallApp } from "./components/InstallApp";
 
 function AppFrame() {
   const { device, hardResetApp, resetVersion } = useSessionContext();
@@ -16,8 +17,11 @@ function AppFrame() {
           <a className="text-lg font-semibold text-kleepee-espresso" href="/">
             Kleepee
           </a>
-          <div className="device-badge" title={device.deviceName}>
-            {device.deviceName}
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+            <div className="device-badge" title={device.deviceName}>
+              {device.deviceName}
+            </div>
+            <InstallApp />
           </div>
         </header>
 
