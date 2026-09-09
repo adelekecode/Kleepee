@@ -350,3 +350,36 @@ https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/ .
 After deploying, close all Kleepee tabs/app windows and reopen them so a waiting
 service worker update can activate. Re-enable notifications from the installed
 app if needed; denied permission must be changed in the device's settings.
+
+### Join with four characters
+
+On the QR screen choose **Get a 4-character code**. The other device opens
+**Join session**, enters the code, and displays a six-digit verification number.
+Compare that number on both screens, then approve on the sending device.
+Full QR/link joining remains automatic. Codes last 10 minutes; individual
+approval requests last 2 minutes. Requests can be declined or canceled, with a
+limit of three new requests per code per minute.
+
+A four-character code is a public locator, not an encryption password. Each side
+creates an ephemeral P-256 ECDH key pair; after the sender verifies the number,
+the session details are AES-GCM encrypted for the requesting device. The Worker
+stores public keys, an independent owner authorization token, and the encrypted
+approval temporarily. It never receives the readable session secret or file
+bytes. Comparison of the verification numbers is required; do not approve an
+unexpected request. Existing QR links retain their fragment secret.
+
+Deploy **both the Worker and frontend** for this feature. It reuses SESSION_DO
+in separate namespaced objects, so no binding or migration changes are needed.
+Checks (not run automatically):
+
+```sh
+npm run lint
+npx tsc -p tsconfig.worker.json
+npm test
+npm run test:worker
+npm run build
+```
+
+For a manual check, create a code, enter it on a second device, verify matching
+numbers, approve, then send text and a file both ways. Repeat with Decline,
+Cancel, an invalid code, and an expired code. Verify QR/link joining still works.

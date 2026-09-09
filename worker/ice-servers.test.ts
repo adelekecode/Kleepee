@@ -4,12 +4,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import worker from "./index";
 import { getIceServerConfiguration, type TurnEnv } from "./ice-servers";
 
-const testSecrets = { TURN_KEY_ID: "test-turn-key", TURN_KEY_API_TOKEN: "server-only-test-token" };
+const testSecrets = {
+  TURN_KEY_ID: "test-turn-key",
+  TURN_KEY_API_TOKEN: "server-only-test-token",
+};
 const providerOrigin = "https://rtc.live.cloudflare.com";
-const providerPath = "/v1/turn/keys/test-turn-key/credentials/generate-ice-servers";
+const providerPath =
+  "/v1/turn/keys/test-turn-key/credentials/generate-ice-servers";
 const providerConfiguration = {
   iceServers: [
-    { urls: ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"], extra: "discard" },
+    {
+      urls: ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"],
+      extra: "discard",
+    },
     {
       urls: [
         "turn:turn.cloudflare.com:3478?transport=udp",
@@ -38,52 +45,88 @@ beforeEach(() => {
 afterEach(async () => {
   fetchMock.assertNoPendingInterceptors();
   fetchMock.deactivate();
-  await Promise.all(peers.splice(0).map(async ({ ws, closed }) => {
-    if (ws.readyState === WebSocket.OPEN) ws.close(1000);
-    await closed;
-  }));
+  await Promise.all(
+    peers.splice(0).map(async ({ ws, closed }) => {
+      if (ws.readyState === WebSocket.OPEN) ws.close(1000);
+      await closed;
+    }),
+  );
   for (const id of sessions.splice(0)) {
-    await runInDurableObject(env.SESSION_DO.get(env.SESSION_DO.idFromName(id)), async (_instance, ctx) => {
-      await ctx.storage.sync();
-    });
+    await runInDurableObject(
+      env.SESSION_DO.get(env.SESSION_DO.idFromName(id)),
+      async (_instance, ctx) => {
+        await ctx.storage.sync();
+      },
+    );
   }
 });
 
 function mockProvider(body: object, status = 201) {
-  fetchMock.get(providerOrigin).intercept({
-    path: providerPath,
-    method: "POST",
-    headers: { authorization: `Bearer ${testSecrets.TURN_KEY_API_TOKEN}`, "content-type": "application/json" },
-    body: JSON.stringify({ ttl: 3600 }),
-  }).reply(status, body);
+  fetchMock
+    .get(providerOrigin)
+    .intercept({
+      path: providerPath,
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${testSecrets.TURN_KEY_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ttl: 3600 }),
+    })
+    .reply(status, body);
 }
 
 async function createSession(): Promise<string> {
-  const response = await SELF.fetch("https://worker.test/sessions", { method: "POST" });
-  const { sessionId } = await response.json() as { sessionId: string };
+  const response = await SELF.fetch("https://worker.test/sessions", {
+    method: "POST",
+  });
+  const { sessionId } = (await response.json()) as { sessionId: string };
   sessions.push(sessionId);
   return sessionId;
 }
 
 async function connect(id: string, deviceId: string) {
-  const response = await SELF.fetch(`https://worker.test/sessions/${id}/ws?deviceId=${deviceId}`, {
-    headers: { Upgrade: "websocket" },
-  });
+  const response = await SELF.fetch(
+    `https://worker.test/sessions/${id}/ws?deviceId=${deviceId}`,
+    {
+      headers: { Upgrade: "websocket" },
+    },
+  );
   expect(response.status).toBe(101);
   const ws = response.webSocket!;
-  const closed = new Promise<void>((resolve) => ws.addEventListener("close", () => {
-    if (ws.readyState === WebSocket.CLOSING) ws.close();
-    resolve();
-  }, { once: true }));
+  const closed = new Promise<void>((resolve) =>
+    ws.addEventListener(
+      "close",
+      () => {
+        if (ws.readyState === WebSocket.CLOSING) ws.close();
+        resolve();
+      },
+      { once: true },
+    ),
+  );
   ws.accept();
   peers.push({ ws, closed });
 }
 
-function requestIce(id: string, deviceId = "first", secrets: TurnEnv = {}, prefix = "") {
-  return worker.fetch(new Request(`https://worker.test${prefix}/sessions/${id}/ice-servers?deviceId=${deviceId}`), {
-    ...env,
-    ...secrets,
-  });
+function requestIce(
+  id: string,
+  deviceId = "first",
+  secrets: TurnEnv = {},
+  prefix = "",
+) {
+  return worker.fetch(
+    new Request(
+      `https://worker.test${prefix}/sessions/${id}/ice-servers?deviceId=${deviceId}`,
+    ),
+    {
+      ...env,
+      // Local Wrangler secrets must not change which provisioning path a test
+      // exercises. Only explicit fixture credentials enable TURN here.
+      TURN_KEY_ID: undefined,
+      TURN_KEY_API_TOKEN: undefined,
+      ...secrets,
+    },
+  );
 }
 
 describe("TURN credential configuration", () => {
@@ -102,7 +145,9 @@ describe("TURN credential configuration", () => {
   it.each([{ TURN_KEY_ID: "key" }, { TURN_KEY_API_TOKEN: "token" }])(
     "rejects partial configuration without making a provider request",
     async (secrets) => {
-      await expect(getIceServerConfiguration(secrets)).rejects.toThrow("Relay unavailable");
+      await expect(getIceServerConfiguration(secrets)).rejects.toThrow(
+        "Relay unavailable",
+      );
     },
   );
 
@@ -127,36 +172,79 @@ describe("TURN credential configuration", () => {
         credential: "temporary-password",
       },
     ]);
-    expect(JSON.stringify(result)).not.toContain(testSecrets.TURN_KEY_API_TOKEN);
+    expect(JSON.stringify(result)).not.toContain(
+      testSecrets.TURN_KEY_API_TOKEN,
+    );
     expect(JSON.stringify(result)).not.toContain(testSecrets.TURN_KEY_ID);
   });
 
   it("accepts a single URL string in a provider ICE entry", async () => {
-    mockProvider({ iceServers: [{ urls: "turns:turn.cloudflare.com:443?transport=tcp", username: "u", credential: "p" }] });
-    expect((await getIceServerConfiguration(testSecrets)).relayAvailable).toBe(true);
+    mockProvider({
+      iceServers: [
+        {
+          urls: "turns:turn.cloudflare.com:443?transport=tcp",
+          username: "u",
+          credential: "p",
+        },
+      ],
+    });
+    expect((await getIceServerConfiguration(testSecrets)).relayAvailable).toBe(
+      true,
+    );
   });
 
   it.each([
     {},
     { iceServers: [] },
     { iceServers: [{ urls: ["stun:stun.cloudflare.com:3478"] }] },
-    { iceServers: [{ urls: ["turn:turn.cloudflare.com:53?transport=udp"], username: "u", credential: "p" }] },
-    { iceServers: [{ urls: ["turns:turn.cloudflare.com:443?transport=tcp"], username: "u" }] },
-    { iceServers: [{ urls: ["turns:turn.cloudflare.com:443?transport=tcp"], username: "", credential: "p" }] },
+    {
+      iceServers: [
+        {
+          urls: ["turn:turn.cloudflare.com:53?transport=udp"],
+          username: "u",
+          credential: "p",
+        },
+      ],
+    },
+    {
+      iceServers: [
+        {
+          urls: ["turns:turn.cloudflare.com:443?transport=tcp"],
+          username: "u",
+        },
+      ],
+    },
+    {
+      iceServers: [
+        {
+          urls: ["turns:turn.cloudflare.com:443?transport=tcp"],
+          username: "",
+          credential: "p",
+        },
+      ],
+    },
   ])("rejects invalid or unusable provider configuration", async (body) => {
     mockProvider(body);
-    await expect(getIceServerConfiguration(testSecrets)).rejects.toThrow("Relay unavailable");
+    await expect(getIceServerConfiguration(testSecrets)).rejects.toThrow(
+      "Relay unavailable",
+    );
   });
 
   it("sanitizes provider HTTP failures", async () => {
     mockProvider({ error: testSecrets.TURN_KEY_API_TOKEN }, 401);
-    await expect(getIceServerConfiguration(testSecrets)).rejects.toThrow(/^Relay unavailable$/);
+    await expect(getIceServerConfiguration(testSecrets)).rejects.toThrow(
+      /^Relay unavailable$/,
+    );
   });
 
   it("sanitizes provider network failures", async () => {
-    fetchMock.get(providerOrigin).intercept({ path: providerPath, method: "POST" })
+    fetchMock
+      .get(providerOrigin)
+      .intercept({ path: providerPath, method: "POST" })
       .replyWithError(new Error(testSecrets.TURN_KEY_API_TOKEN));
-    await expect(getIceServerConfiguration(testSecrets)).rejects.toThrow(/^Relay unavailable$/);
+    await expect(getIceServerConfiguration(testSecrets)).rejects.toThrow(
+      /^Relay unavailable$/,
+    );
   });
 });
 
@@ -193,14 +281,25 @@ describe("session ICE endpoint", () => {
   it("rejects an empty or nonexistent session before requesting credentials", async () => {
     const id = await createSession();
     expect((await requestIce(id, "first", testSecrets)).status).toBe(404);
-    expect((await requestIce(crypto.randomUUID().replaceAll("-", ""), "first", testSecrets)).status).toBe(404);
+    expect(
+      (
+        await requestIce(
+          crypto.randomUUID().replaceAll("-", ""),
+          "first",
+          testSecrets,
+        )
+      ).status,
+    ).toBe(404);
   });
 
   it("rejects an expired session before requesting credentials", async () => {
     const id = await createSession();
-    await runInDurableObject(env.SESSION_DO.get(env.SESSION_DO.idFromName(id)), async (_instance, ctx) => {
-      await ctx.storage.put("sessionState", "EXPIRED");
-    });
+    await runInDurableObject(
+      env.SESSION_DO.get(env.SESSION_DO.idFromName(id)),
+      async (_instance, ctx) => {
+        await ctx.storage.put("sessionState", "EXPIRED");
+      },
+    );
     expect((await requestIce(id, "first", testSecrets)).status).toBe(410);
   });
 
@@ -216,7 +315,9 @@ describe("session ICE endpoint", () => {
     const response = await requestIce(id, "first", testSecrets);
     expect(response.status).toBe(503);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-    expect(await response.json()).toEqual({ error: "Connection relay unavailable" });
+    expect(await response.json()).toEqual({
+      error: "Connection relay unavailable",
+    });
   });
 
   it("returns a sanitized 503 for partial server configuration", async () => {
@@ -224,6 +325,8 @@ describe("session ICE endpoint", () => {
     await connect(id, "first");
     const response = await requestIce(id, "first", { TURN_KEY_ID: "key" });
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "Connection relay unavailable" });
+    expect(await response.json()).toEqual({
+      error: "Connection relay unavailable",
+    });
   });
 });

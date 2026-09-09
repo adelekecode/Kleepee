@@ -116,8 +116,14 @@ describe("HomePage file sharing", () => {
     expect(join.getAttribute("aria-expanded")).toBe("false");
     act(() => join.click());
     expect(join.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      host.querySelector('input[placeholder="Paste the full Kleepee link…"]'),
-    ).not.toBeNull();
+    const label = [...host.querySelectorAll("label")].find(
+      (element) => element.textContent?.trim() === "Session code or link",
+    );
+    expect(label).toBeDefined();
+    const input = [...host.querySelectorAll("input")].find(
+      (element) => element.id === label?.htmlFor,
+    );
+    expect(input).toBeDefined();
+    expect(input?.placeholder).toBe("Enter 4 characters or paste a join link…");
   });
 });
