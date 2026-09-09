@@ -39,7 +39,10 @@ export function getNotificationPermission(): NotificationPermission {
 }
 
 /** Show a system notification only when the tab is not focused. */
-export function showMessageNotification(senderName: string, preview: string): void {
+export function showMessageNotification(
+  senderName: string,
+  preview: string,
+): void {
   if (!systemNotificationsSupported()) return;
   if (Notification.permission !== "granted") return;
   if (document.visibilityState === "visible") return;

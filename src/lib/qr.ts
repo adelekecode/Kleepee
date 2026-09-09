@@ -3,7 +3,10 @@ import QRCode from "qrcode";
 const DEFAULT_JOIN_ORIGIN = "https://kleepee.adelekecode.dev";
 
 export function getJoinOrigin(): string {
-  if (typeof import.meta.env !== "undefined" && import.meta.env.VITE_JOIN_ORIGIN) {
+  if (
+    typeof import.meta.env !== "undefined" &&
+    import.meta.env.VITE_JOIN_ORIGIN
+  ) {
     return import.meta.env.VITE_JOIN_ORIGIN as string;
   }
 
@@ -29,7 +32,10 @@ export function buildJoinURL(
  * - sessionId: the last path segment (after /j/)
  * - sessionSecret: the URL fragment (without the leading #)
  */
-export function parseJoinURL(url: string): { sessionId: string; sessionSecret: string } {
+export function parseJoinURL(url: string): {
+  sessionId: string;
+  sessionSecret: string;
+} {
   const parsed = new URL(url);
   // pathname is /j/<sessionId>; grab the last segment
   const segments = parsed.pathname.split("/");

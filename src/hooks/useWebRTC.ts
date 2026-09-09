@@ -29,7 +29,7 @@ export function useWebRTC(callbacks: WebRTCCallbacks) {
       managerRef.current = new WebRTCManager(ICE_SERVERS, stateCallbacks);
     }
     return managerRef.current;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const send = useCallback((data: Uint8Array) => {

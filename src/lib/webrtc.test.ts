@@ -11,7 +11,11 @@ class FakeChannel extends EventTarget {
   onerror: (() => void) | null = null;
   onmessage = null;
   send = vi.fn();
-  close = vi.fn(() => { this.readyState = "closed"; this.onclose?.(); this.dispatchEvent(new Event("close")); });
+  close = vi.fn(() => {
+    this.readyState = "closed";
+    this.onclose?.();
+    this.dispatchEvent(new Event("close"));
+  });
 }
 
 class FakePeer {
@@ -25,12 +29,16 @@ class FakePeer {
   onicecandidate: ((event: { candidate: unknown }) => void) | null = null;
   ondatachannel = null;
   channel = new FakeChannel();
-  constructor(readonly configuration?: RTCConfiguration) { FakePeer.instances.push(this); }
+  constructor(readonly configuration?: RTCConfiguration) {
+    FakePeer.instances.push(this);
+  }
   createDataChannel = () => this.channel;
   createOffer = async () => ({ type: "offer", sdp: "test" });
   createAnswer = async () => ({ type: "answer", sdp: "test" });
   setLocalDescription = async () => {};
-  setRemoteDescription = async (value: RTCSessionDescriptionInit) => { this.remoteDescription = value; };
+  setRemoteDescription = async (value: RTCSessionDescriptionInit) => {
+    this.remoteDescription = value;
+  };
   addIceCandidate = vi.fn(async () => {});
   close = vi.fn();
 }
@@ -44,11 +52,18 @@ describe("WebRTC connection recovery", () => {
     vi.stubGlobal("RTCPeerConnection", FakePeer);
     onStateChange = vi.fn();
     manager = new WebRTCManager([], {
-      onStateChange, onMessage: vi.fn(), onIceCandidate: vi.fn(),
-      onOffer: vi.fn(), onAnswer: vi.fn(),
+      onStateChange,
+      onMessage: vi.fn(),
+      onIceCandidate: vi.fn(),
+      onOffer: vi.fn(),
+      onAnswer: vi.fn(),
     });
   });
-  afterEach(() => { manager.close(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+  afterEach(() => {
+    manager.close();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("reports a stalled handshake after 15 seconds", async () => {
     await manager.createOffer();
@@ -107,26 +122,51 @@ describe("WebRTC connection recovery", () => {
     const candidate = { candidate: "candidate:test" };
     await manager.addIceCandidate(candidate);
     await manager.handleOffer({ type: "offer", sdp: "test" });
-    expect(FakePeer.instances[0].addIceCandidate).toHaveBeenCalledWith(candidate);
+    expect(FakePeer.instances[0].addIceCandidate).toHaveBeenCalledWith(
+      candidate,
+    );
   });
 
-  it.each(["offer", "answer"])("loads TURN credentials before creating a peer for an %s", async (role) => {
-    const iceServers = [{ urls: "turns:turn.cloudflare.com:443", username: "user", credential: "short-lived" }];
-    const load = vi.fn(async () => iceServers);
-    manager = new WebRTCManager(load, {
-      onStateChange, onMessage: vi.fn(), onIceCandidate: vi.fn(), onOffer: vi.fn(), onAnswer: vi.fn(),
-    });
-    if (role === "offer") await manager.createOffer();
-    else await manager.handleOffer({ type: "offer", sdp: "test" });
-    expect(load).toHaveBeenCalledOnce();
-    expect(FakePeer.instances[0].configuration).toEqual({ iceServers });
-  });
+  it.each(["offer", "answer"])(
+    "loads TURN credentials before creating a peer for an %s",
+    async (role) => {
+      const iceServers = [
+        {
+          urls: "turns:turn.cloudflare.com:443",
+          username: "user",
+          credential: "short-lived",
+        },
+      ];
+      const load = vi.fn(async () => iceServers);
+      manager = new WebRTCManager(load, {
+        onStateChange,
+        onMessage: vi.fn(),
+        onIceCandidate: vi.fn(),
+        onOffer: vi.fn(),
+        onAnswer: vi.fn(),
+      });
+      if (role === "offer") await manager.createOffer();
+      else await manager.handleOffer({ type: "offer", sdp: "test" });
+      expect(load).toHaveBeenCalledOnce();
+      expect(FakePeer.instances[0].configuration).toEqual({ iceServers });
+    },
+  );
 
   it("does not resurrect a closed manager when credentials finish loading", async () => {
     let resolve!: (servers: RTCIceServer[]) => void;
-    manager = new WebRTCManager(() => new Promise((done) => { resolve = done; }), {
-      onStateChange, onMessage: vi.fn(), onIceCandidate: vi.fn(), onOffer: vi.fn(), onAnswer: vi.fn(),
-    });
+    manager = new WebRTCManager(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+      {
+        onStateChange,
+        onMessage: vi.fn(),
+        onIceCandidate: vi.fn(),
+        onOffer: vi.fn(),
+        onAnswer: vi.fn(),
+      },
+    );
     const offer = manager.createOffer();
     manager.close();
     resolve([]);
@@ -159,26 +199,36 @@ describe("WebRTC connection recovery", () => {
     expect(channel.send).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["abort", "close", "error", "manager-close"])("wakes a blocked file send on %s and removes listeners", async (reason) => {
-    await manager.createOffer();
-    const channel = FakePeer.instances[0].channel;
-    channel.readyState = "open";
-    channel.onopen?.();
-    channel.bufferedAmount = 2 * 1024 * 1024;
-    const removeListener = vi.spyOn(channel, "removeEventListener");
-    const controller = new AbortController();
-    const pending = manager.sendBuffered(new Uint8Array([1]), controller.signal);
-    if (reason === "abort") controller.abort();
-    else if (reason === "manager-close") manager.close();
-    else if (reason === "close") channel.close();
-    else channel.dispatchEvent(new Event("error"));
-    await expect(pending).resolves.toBe(false);
-    expect(channel.send).not.toHaveBeenCalled();
-    expect(removeListener.mock.calls.map(([type]) => type)).toEqual(["bufferedamountlow", "close", "error"]);
-    channel.bufferedAmount = 0;
-    channel.dispatchEvent(new Event("bufferedamountlow"));
-    expect(channel.send).not.toHaveBeenCalled();
-  });
+  it.each(["abort", "close", "error", "manager-close"])(
+    "wakes a blocked file send on %s and removes listeners",
+    async (reason) => {
+      await manager.createOffer();
+      const channel = FakePeer.instances[0].channel;
+      channel.readyState = "open";
+      channel.onopen?.();
+      channel.bufferedAmount = 2 * 1024 * 1024;
+      const removeListener = vi.spyOn(channel, "removeEventListener");
+      const controller = new AbortController();
+      const pending = manager.sendBuffered(
+        new Uint8Array([1]),
+        controller.signal,
+      );
+      if (reason === "abort") controller.abort();
+      else if (reason === "manager-close") manager.close();
+      else if (reason === "close") channel.close();
+      else channel.dispatchEvent(new Event("error"));
+      await expect(pending).resolves.toBe(false);
+      expect(channel.send).not.toHaveBeenCalled();
+      expect(removeListener.mock.calls.map(([type]) => type)).toEqual([
+        "bufferedamountlow",
+        "close",
+        "error",
+      ]);
+      channel.bufferedAmount = 0;
+      channel.dispatchEvent(new Event("bufferedamountlow"));
+      expect(channel.send).not.toHaveBeenCalled();
+    },
+  );
 
   it("times out a buffer which never drains", async () => {
     await manager.createOffer();
@@ -186,7 +236,10 @@ describe("WebRTC connection recovery", () => {
     channel.readyState = "open";
     channel.onopen?.();
     channel.bufferedAmount = 2 * 1024 * 1024;
-    const pending = manager.sendBuffered(new Uint8Array([1]), new AbortController().signal);
+    const pending = manager.sendBuffered(
+      new Uint8Array([1]),
+      new AbortController().signal,
+    );
     await vi.advanceTimersByTimeAsync(60_000);
     await expect(pending).resolves.toBe(false);
     expect(channel.send).not.toHaveBeenCalled();
@@ -199,10 +252,14 @@ describe("WebRTC connection recovery", () => {
     pc.sctp.maxMessageSize = 1024;
     const signal = new AbortController().signal;
     expect(manager.maxMessageSize).toBe(1024);
-    await expect(manager.sendBuffered(new Uint8Array(1025), signal)).resolves.toBe(false);
+    await expect(
+      manager.sendBuffered(new Uint8Array(1025), signal),
+    ).resolves.toBe(false);
     expect(manager.send(new Uint8Array(1025))).toBe(false);
     expect(pc.channel.send).not.toHaveBeenCalled();
-    await expect(manager.sendBuffered(new Uint8Array(1024), signal)).resolves.toBe(true);
+    await expect(
+      manager.sendBuffered(new Uint8Array(1024), signal),
+    ).resolves.toBe(true);
     expect(manager.send(new Uint8Array(1024))).toBe(true);
     expect(pc.channel.send).toHaveBeenCalledTimes(2);
   });
@@ -211,21 +268,31 @@ describe("WebRTC connection recovery", () => {
     await manager.createOffer();
     const channel = FakePeer.instances[0].channel;
     channel.readyState = "open";
-    channel.send.mockImplementation(() => { throw new DOMException("Buffer full", "OperationError"); });
-    await expect(manager.sendBuffered(new Uint8Array([1]), new AbortController().signal)).resolves.toBe(false);
+    channel.send.mockImplementation(() => {
+      throw new DOMException("Buffer full", "OperationError");
+    });
+    await expect(
+      manager.sendBuffered(new Uint8Array([1]), new AbortController().signal),
+    ).resolves.toBe(false);
     expect(manager.send(new Uint8Array([1]))).toBe(false);
   });
 
   it("rejects closed channels and already-aborted transfers before sending", async () => {
     const signal = new AbortController().signal;
-    await expect(manager.sendBuffered(new Uint8Array([1]), signal)).resolves.toBe(false);
+    await expect(
+      manager.sendBuffered(new Uint8Array([1]), signal),
+    ).resolves.toBe(false);
     await manager.createOffer();
     const channel = FakePeer.instances[0].channel;
-    await expect(manager.sendBuffered(new Uint8Array([1]), signal)).resolves.toBe(false);
+    await expect(
+      manager.sendBuffered(new Uint8Array([1]), signal),
+    ).resolves.toBe(false);
     channel.readyState = "open";
     const controller = new AbortController();
     controller.abort();
-    await expect(manager.sendBuffered(new Uint8Array([1]), controller.signal)).resolves.toBe(false);
+    await expect(
+      manager.sendBuffered(new Uint8Array([1]), controller.signal),
+    ).resolves.toBe(false);
     expect(channel.send).not.toHaveBeenCalled();
   });
 
@@ -234,7 +301,10 @@ describe("WebRTC connection recovery", () => {
     const oldChannel = FakePeer.instances[0].channel;
     oldChannel.readyState = "open";
     oldChannel.bufferedAmount = 2 * 1024 * 1024;
-    const pending = manager.sendBuffered(new Uint8Array([1]), new AbortController().signal);
+    const pending = manager.sendBuffered(
+      new Uint8Array([1]),
+      new AbortController().signal,
+    );
     await manager.createOffer();
     const replacement = FakePeer.instances[1].channel;
     replacement.readyState = "open";
@@ -243,7 +313,9 @@ describe("WebRTC connection recovery", () => {
     await expect(pending).resolves.toBe(false);
     expect(oldChannel.send).not.toHaveBeenCalled();
     expect(replacement.send).not.toHaveBeenCalled();
-    await expect(manager.sendBuffered(new Uint8Array([2]), new AbortController().signal)).resolves.toBe(true);
+    await expect(
+      manager.sendBuffered(new Uint8Array([2]), new AbortController().signal),
+    ).resolves.toBe(true);
     expect(replacement.send).toHaveBeenCalledWith(new Uint8Array([2]));
   });
 });

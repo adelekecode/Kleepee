@@ -246,3 +246,19 @@ The sender prepares up to four chunks concurrently (file reads and AES-GCM
 `src/lib/fileTransferSpeed.test.ts` checks bounded preparation, order, cancellation,
  and an encrypted 4 MiB download against its SHA-256 hash. These automated tests
  verify behavior, not achievable speed on a particular network.
+
+### Reset and session history
+
+`Reset app` leaves the current tab's session, stops its transfers, discards its
+text/files and unsent drafts, clears saved Recent sessions for this browser
+origin, and returns Home. Reset does not record the session being discarded or
+save it again during unload. Device identity is retained so other active Kleepee
+tabs continue to use the same identity. Unrelated browser storage is untouched.
+
+`End session` keeps the current feed available to copy/download, but removes the
+current tab's automatic session restore data. A network interruption still keeps
+that restore data so refreshing can reconnect. Normal session endings/closing
+can still populate Recent sessions (including the join secret and text preview);
+Reset app and the list's Clear all action remove the saved history. Only sessions
+that actually connected are recorded. Reset is local: it does not revoke a join
+link, delete the server's session, or erase copies on another device.

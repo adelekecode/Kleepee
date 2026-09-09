@@ -52,7 +52,11 @@ export function useNotifications(): UseNotificationsResult {
   const showToast = useCallback((senderName: string, preview: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     const id = ++toastId;
-    setToast({ id, senderName, preview: preview.slice(0, 80) + (preview.length > 80 ? "…" : "") });
+    setToast({
+      id,
+      senderName,
+      preview: preview.slice(0, 80) + (preview.length > 80 ? "…" : ""),
+    });
     toastTimerRef.current = setTimeout(() => setToast(null), 4000);
   }, []);
 
@@ -66,7 +70,8 @@ export function useNotifications(): UseNotificationsResult {
       if (item.senderId === currentDeviceId) return;
 
       // Try system notification first (desktop / PWA)
-      const shown = systemNotificationsSupported() && Notification.permission === "granted";
+      const shown =
+        systemNotificationsSupported() && Notification.permission === "granted";
       showMessageNotification(item.senderName, item.content);
 
       // Fall back to in-app toast when tab is visible or system notif unavailable

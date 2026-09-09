@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { readSessionHistory, clearSessionHistory, type SessionHistoryEntry } from "../lib/sessionHistory";
+import {
+  readSessionHistory,
+  clearSessionHistory,
+  type SessionHistoryEntry,
+} from "../lib/sessionHistory";
 
 function formatRelativeTime(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -43,7 +47,9 @@ export function RecentSessions({ onResume }: RecentSessionsProps) {
 
   function handleResume(entry: SessionHistoryEntry) {
     onResume?.(entry.sessionId, entry.sessionSecret);
-    navigate(`/j/${encodeURIComponent(entry.sessionId)}#${entry.sessionSecret}`);
+    navigate(
+      `/j/${encodeURIComponent(entry.sessionId)}#${entry.sessionSecret}`,
+    );
   }
 
   function handleClearAll() {
@@ -87,10 +93,13 @@ export function RecentSessions({ onResume }: RecentSessionsProps) {
                   )}
                 </div>
                 <div className="shrink-0 text-right">
-                  <p className="text-xs text-kleepee-muted">{formatRelativeTime(entry.endedAt)}</p>
+                  <p className="text-xs text-kleepee-muted">
+                    {formatRelativeTime(entry.endedAt)}
+                  </p>
                   {entry.itemCount > 0 && (
                     <p className="mt-0.5 text-xs text-kleepee-muted">
-                      {entry.itemCount} {entry.itemCount === 1 ? "item" : "items"}
+                      {entry.itemCount}{" "}
+                      {entry.itemCount === 1 ? "item" : "items"}
                     </p>
                   )}
                 </div>

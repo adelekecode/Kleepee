@@ -16,7 +16,9 @@ describe("classifyContent", () => {
     });
 
     it('returns "url" for a URL with a path and fragment', () => {
-      expect(classifyContent("https://kleepee.app/j/abc123#secret")).toBe("url");
+      expect(classifyContent("https://kleepee.app/j/abc123#secret")).toBe(
+        "url",
+      );
     });
 
     it('does NOT return "url" for ftp URLs (not http/https)', () => {

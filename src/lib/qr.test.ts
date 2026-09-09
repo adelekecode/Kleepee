@@ -36,12 +36,16 @@ describe("buildJoinURL", () => {
 
 describe("parseJoinURL", () => {
   it("extracts the sessionId from the path", () => {
-    const { sessionId } = parseJoinURL("https://kleepee.adelekecode.dev/j/SESSION123#SECRET");
+    const { sessionId } = parseJoinURL(
+      "https://kleepee.adelekecode.dev/j/SESSION123#SECRET",
+    );
     expect(sessionId).toBe("SESSION123");
   });
 
   it("extracts the sessionSecret from the fragment", () => {
-    const { sessionSecret } = parseJoinURL("https://kleepee.app/j/abc#mySecret");
+    const { sessionSecret } = parseJoinURL(
+      "https://kleepee.app/j/abc#mySecret",
+    );
     expect(sessionSecret).toBe("mySecret");
   });
 

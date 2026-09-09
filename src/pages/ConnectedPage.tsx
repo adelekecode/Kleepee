@@ -55,14 +55,21 @@ export function ConnectedPage() {
       const latestFile = fileItems[fileItems.length - 1];
       // Pick whichever is more recent
       const latest =
-        latestFile && (!latestText || latestFile.timestamp >= latestText.timestamp)
+        latestFile &&
+        (!latestText || latestFile.timestamp >= latestText.timestamp)
           ? latestFile
           : latestText;
       if (latest) {
-        const preview = latest.type === "text" ? latest.content : `📎 ${latest.fileName}`;
+        const preview =
+          latest.type === "text" ? latest.content : `📎 ${latest.fileName}`;
         // Reuse notify by adapting to its TextItem-like signature
         notify(
-          { ...latest, type: "text", content: preview, id: latest.id } as Parameters<typeof notify>[0],
+          {
+            ...latest,
+            type: "text",
+            content: preview,
+            id: latest.id,
+          } as Parameters<typeof notify>[0],
           device.deviceId,
         );
       }
@@ -75,20 +82,34 @@ export function ConnectedPage() {
   }, [navigate, state]);
 
   if (!sessionId) return <Navigate to="/" replace />;
-  if (state === "WAITING" && role === "initiator") return <Navigate to="/waiting" replace />;
+  if (state === "WAITING" && role === "initiator")
+    return <Navigate to="/waiting" replace />;
 
   const canSend = state === "CONNECTED" && dataChannelState === "open";
   const ended = state === "DISCONNECTED" && terminalReason === "manual";
-  const exhausted = state === "DISCONNECTED" && terminalReason === "retries_exhausted";
+  const exhausted =
+    state === "DISCONNECTED" && terminalReason === "retries_exhausted";
 
-  async function handleSubmit(text: string, files: File[]): Promise<ComposerResult> {
+  async function handleSubmit(
+    text: string,
+    files: File[],
+  ): Promise<ComposerResult> {
     unlockAudio();
     setDropError(null);
-    if (!canSend) return { textSent: false, accepted: [], errors: ["Wait for the connection before sending."] };
+    if (!canSend)
+      return {
+        textSent: false,
+        accepted: [],
+        errors: ["Wait for the connection before sending."],
+      };
     const queued = enqueueFiles(files);
     if (!text.trim()) return { textSent: false, ...queued };
     const result = await sendText(text, device.deviceName, device.deviceId);
-    return { textSent: result.ok, accepted: queued.accepted, errors: [...queued.errors, ...(!result.ok ? [result.error.message] : [])] };
+    return {
+      textSent: result.ok,
+      accepted: queued.accepted,
+      errors: [...queued.errors, ...(!result.ok ? [result.error.message] : [])],
+    };
   }
 
   function createNewSession() {
@@ -120,7 +141,11 @@ export function ConnectedPage() {
         />
 
         {ended || exhausted ? (
-          <button className="btn-primary" type="button" onClick={createNewSession}>
+          <button
+            className="btn-primary"
+            type="button"
+            onClick={createNewSession}
+          >
             Create new session
           </button>
         ) : (
@@ -129,17 +154,32 @@ export function ConnectedPage() {
               className="btn-secondary"
               type="button"
               title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
-              aria-label={soundEnabled ? "Mute notification sounds" : "Unmute notification sounds"}
-              onClick={() => { unlockAudio(); toggleSound(); }}
+              aria-label={
+                soundEnabled
+                  ? "Mute notification sounds"
+                  : "Unmute notification sounds"
+              }
+              onClick={() => {
+                unlockAudio();
+                toggleSound();
+              }}
             >
               {soundEnabled ? "🔔" : "🔕"}
             </button>
             {systemSupported && permission === "default" && (
-              <button className="btn-secondary" type="button" onClick={requestPermission}>
+              <button
+                className="btn-secondary"
+                type="button"
+                onClick={requestPermission}
+              >
                 Enable notifications
               </button>
             )}
-            <button className="btn-secondary" type="button" onClick={openNewSession}>
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={openNewSession}
+            >
               New session
             </button>
             <button className="btn-danger" type="button" onClick={disconnect}>
@@ -155,7 +195,10 @@ export function ConnectedPage() {
         onCancelTransfer={cancelFile}
         onRetryTransfer={canSend ? retryFile : undefined}
         onDropFiles={(files) => {
-          if (!canSend) { setDropError("Wait for the connection before dropping files."); return; }
+          if (!canSend) {
+            setDropError("Wait for the connection before dropping files.");
+            return;
+          }
           const result = enqueueFiles(files);
           setDropError(result.errors.length ? result.errors.join(" ") : null);
         }}

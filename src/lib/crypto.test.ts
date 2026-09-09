@@ -3,12 +3,7 @@
  * Requirements: 5.1, 5.2, 5.3
  */
 import { describe, it, expect } from "vitest";
-import {
-  generateSessionSecret,
-  deriveKey,
-  encrypt,
-  decrypt,
-} from "./crypto";
+import { generateSessionSecret, deriveKey, encrypt, decrypt } from "./crypto";
 
 describe("generateSessionSecret", () => {
   it("returns a non-empty string", () => {
@@ -86,6 +81,8 @@ describe("encrypt / decrypt round trip", () => {
     const a = await encrypt(key, plaintext);
     const b = await encrypt(key, plaintext);
     // The IVs should differ, making the outputs unequal
-    expect(Buffer.from(a).toString("hex")).not.toBe(Buffer.from(b).toString("hex"));
+    expect(Buffer.from(a).toString("hex")).not.toBe(
+      Buffer.from(b).toString("hex"),
+    );
   });
 });

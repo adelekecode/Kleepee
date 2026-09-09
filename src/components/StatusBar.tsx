@@ -14,7 +14,11 @@ interface StatusBarProps {
 
 function SpinnerDots() {
   return (
-    <span className="inline-flex items-center gap-1" aria-label="Loading" role="status">
+    <span
+      className="inline-flex items-center gap-1"
+      aria-label="Loading"
+      role="status"
+    >
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.3s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.15s]" />
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current" />
@@ -35,15 +39,16 @@ export function StatusBar({
   // When dataChannelState is not provided, fall back to trusting state === "CONNECTED".
   const isConnected =
     state === "CONNECTED" &&
-    (dataChannelState === undefined || dataChannelState === null || dataChannelState === "open");
+    (dataChannelState === undefined ||
+      dataChannelState === null ||
+      dataChannelState === "open");
 
   const isEnded =
     state === "EXPIRED" ||
     (state === "DISCONNECTED" && terminalReason === "retries_exhausted") ||
     (state === "DISCONNECTED" && terminalReason === "manual");
 
-  const isReconnecting =
-    state === "DISCONNECTED" && !isEnded;
+  const isReconnecting = state === "DISCONNECTED" && !isEnded;
 
   const tone = isConnected
     ? "border-kleepee-green/25 bg-kleepee-green/10 text-kleepee-green"
@@ -70,7 +75,10 @@ export function StatusBar({
         </>
       ) : isEnded ? (
         <>
-          <span className="h-2 w-2 rounded-full bg-current opacity-55" aria-hidden="true" />
+          <span
+            className="h-2 w-2 rounded-full bg-current opacity-55"
+            aria-hidden="true"
+          />
           <span>
             Connection ended.{" "}
             {onNewSession ? (
@@ -91,7 +99,11 @@ export function StatusBar({
           <SpinnerDots />
           <span>
             Connection lost. Reconnecting
-            {retryAttempt > 0 ? maxRetries ? ` (${retryAttempt}/${maxRetries})` : ` (${retryAttempt})` : ""}
+            {retryAttempt > 0
+              ? maxRetries
+                ? ` (${retryAttempt}/${maxRetries})`
+                : ` (${retryAttempt})`
+              : ""}
             ...
           </span>
         </>

@@ -1,14 +1,26 @@
-import { createContext, useContext, useEffect, type ReactNode } from "react";
-import { clearStoredIdentity } from "../lib/device";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { useNavigate } from "react-router-dom";
+import { clearSessionHistory } from "../lib/sessionHistory";
 import { useDevice } from "../hooks/useDevice";
 import { useFileTransfer } from "../hooks/useFileTransfer";
-import type { FileItem, FileSelectionResult, FileTransfer } from "../types/files";
+import type {
+  FileItem,
+  FileSelectionResult,
+  FileTransfer,
+} from "../types/files";
 import { useSession, type UseSessionResult } from "../hooks/useSession";
 import type { DeviceIdentity } from "../types";
 
 interface SessionContextValue extends UseSessionResult {
   device: DeviceIdentity;
   hardResetApp: () => void;
+  resetVersion: number;
   fileItems: FileItem[];
   fileTransfers: Map<string, FileTransfer>;
   enqueueFiles: (files: File[]) => FileSelectionResult;
@@ -20,8 +32,14 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const device = useDevice();
+  const navigate = useNavigate();
+  const [resetVersion, setResetVersion] = useState(0);
   const session = useSession();
-  const { manager: files, fileItems, transfers: fileTransfers } = useFileTransfer();
+  const {
+    manager: files,
+    fileItems,
+    transfers: fileTransfers,
+  } = useFileTransfer();
 
   useEffect(() => {
     session.setFileFrameHandler((frame) => {
@@ -45,8 +63,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     files.clear();
     return session.joinSession(...args);
   };
-  function reset() { files.clear(); session.reset(); }
-  function disconnect() { files.connectionLost(); session.disconnect(); }
+  function reset() {
+    files.clear();
+    session.reset();
+  }
+  function disconnect() {
+    files.connectionLost();
+    session.disconnect();
+  }
   function enqueueFiles(selected: File[]): FileSelectionResult {
     files.setTransport(session.getFileTransport());
     return files.enqueue(selected, device);
@@ -58,24 +82,31 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   function hardResetApp() {
     reset();
-    clearStoredIdentity();
-
-    try {
-      window.sessionStorage.clear();
-    } catch {
-      /* sessionStorage may be unavailable */
-    }
-
-    if (window.location.pathname === "/") {
-      window.location.reload();
-    } else {
-      window.location.replace("/");
-    }
+    clearSessionHistory();
+    // Remount route-local drafts too, without reloading or rotating the device
+    // identity shared by other active tabs. Only the current session key is removed.
+    setResetVersion((version) => version + 1);
+    navigate("/", { replace: true });
   }
 
   return (
-    <SessionContext.Provider value={{ ...session, createSession, joinSession, reset, disconnect, device, hardResetApp,
-      fileItems, fileTransfers, enqueueFiles, retryFile: files.retry, cancelFile: files.cancel }}>
+    <SessionContext.Provider
+      value={{
+        ...session,
+        createSession,
+        joinSession,
+        reset,
+        disconnect,
+        device,
+        hardResetApp,
+        resetVersion,
+        fileItems,
+        fileTransfers,
+        enqueueFiles,
+        retryFile: files.retry,
+        cancelFile: files.cancel,
+      }}
+    >
       {children}
     </SessionContext.Provider>
   );

@@ -93,11 +93,17 @@ export function TextInput({
           {localError || error ? (
             <span className="text-kleepee-danger">{localError || error}</span>
           ) : (
-            <span>{byteCount.toLocaleString()} / {MAX_BYTES.toLocaleString()} bytes</span>
+            <span>
+              {byteCount.toLocaleString()} / {MAX_BYTES.toLocaleString()} bytes
+            </span>
           )}
         </div>
 
-        <button className="btn-primary w-full sm:w-auto" disabled={disabled || pending || isBlank || isTooLarge} type="submit">
+        <button
+          className="btn-primary w-full sm:w-auto"
+          disabled={disabled || pending || isBlank || isTooLarge}
+          type="submit"
+        >
           {pending ? "Working..." : actionLabel}
         </button>
       </div>
