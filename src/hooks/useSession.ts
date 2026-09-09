@@ -5,7 +5,7 @@ import { deriveKey, encrypt, decryptBytes, encryptBytes, generateSessionSecret }
 import { recordSession } from "../lib/sessionHistory";
 import { CHUNK_SIZE, FRAME_OVERHEAD, decodeFileFrame, encodeFileFrame, isFileFrame } from "../lib/fileTransfer";
 import type { ClientMessage, ServerMessage, SessionState, TextItem } from "../types";
-import type { FileTransport } from "../types/files";
+import type { FileFrame, FileTransport } from "../types/files";
 
 const WORKER_BASE =
   typeof import.meta.env !== "undefined" && import.meta.env.VITE_WORKER_URL
@@ -1070,17 +1070,18 @@ export function useSession(): UseSessionResult {
     const operationId = operationIdRef.current;
     if (!manager || !key || dataChannelStateRef.current !== "open") return null;
     if (fileTransportRef.current?.manager === manager) return fileTransportRef.current.transport;
+    const active = (signal: AbortSignal) => !signal.aborted && rtcRef.current === manager && operationId === operationIdRef.current;
+    const prepare = async (frame: FileFrame, signal: AbortSignal) => {
+      if (!active(signal)) throw new Error("Transfer stopped.");
+      const bytes = await encryptBytes(key, encodeFileFrame(frame));
+      return { send: async () => active(signal) && await manager.sendBuffered(bytes, signal) };
+    };
     const transport: FileTransport = {
       chunkSize: Math.min(CHUNK_SIZE, manager.maxMessageSize - FRAME_OVERHEAD),
+      prepare,
       send: async (frame, signal) => {
-        if (signal.aborted || rtcRef.current !== manager || operationId !== operationIdRef.current) return false;
-        try {
-          const bytes = await encryptBytes(key, encodeFileFrame(frame));
-          if (signal.aborted || rtcRef.current !== manager || operationId !== operationIdRef.current) return false;
-          return await manager.sendBuffered(bytes, signal);
-        } catch {
-          return false;
-        }
+        try { return await (await prepare(frame, signal)).send(); }
+        catch { return false; }
       },
     };
     fileTransportRef.current = { manager, transport };

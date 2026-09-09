@@ -140,15 +140,15 @@ describe("WebRTC connection recovery", () => {
     const channel = FakePeer.instances[0].channel;
     channel.readyState = "open";
     channel.onopen?.();
-    channel.bufferedAmount = 300 * 1024;
+    channel.bufferedAmount = 2 * 1024 * 1024;
     const data = new Uint8Array([1, 2, 3]);
     const pending = manager.sendBuffered(data, new AbortController().signal);
     expect(channel.send).not.toHaveBeenCalled();
-    expect(channel.bufferedAmountLowThreshold).toBe(128 * 1024);
+    expect(channel.bufferedAmountLowThreshold).toBe(512 * 1024);
     // Text remains available while the file sender waits for buffer space.
     expect(manager.send(new Uint8Array([42]))).toBe(true);
     expect(channel.send).toHaveBeenCalledTimes(1);
-    channel.bufferedAmount = 128 * 1024;
+    channel.bufferedAmount = 512 * 1024;
     channel.dispatchEvent(new Event("bufferedamountlow"));
     await expect(pending).resolves.toBe(true);
     expect(channel.send).toHaveBeenLastCalledWith(data);
@@ -164,7 +164,7 @@ describe("WebRTC connection recovery", () => {
     const channel = FakePeer.instances[0].channel;
     channel.readyState = "open";
     channel.onopen?.();
-    channel.bufferedAmount = 300 * 1024;
+    channel.bufferedAmount = 2 * 1024 * 1024;
     const removeListener = vi.spyOn(channel, "removeEventListener");
     const controller = new AbortController();
     const pending = manager.sendBuffered(new Uint8Array([1]), controller.signal);
@@ -185,7 +185,7 @@ describe("WebRTC connection recovery", () => {
     const channel = FakePeer.instances[0].channel;
     channel.readyState = "open";
     channel.onopen?.();
-    channel.bufferedAmount = 300 * 1024;
+    channel.bufferedAmount = 2 * 1024 * 1024;
     const pending = manager.sendBuffered(new Uint8Array([1]), new AbortController().signal);
     await vi.advanceTimersByTimeAsync(60_000);
     await expect(pending).resolves.toBe(false);
@@ -233,7 +233,7 @@ describe("WebRTC connection recovery", () => {
     await manager.createOffer();
     const oldChannel = FakePeer.instances[0].channel;
     oldChannel.readyState = "open";
-    oldChannel.bufferedAmount = 300 * 1024;
+    oldChannel.bufferedAmount = 2 * 1024 * 1024;
     const pending = manager.sendBuffered(new Uint8Array([1]), new AbortController().signal);
     await manager.createOffer();
     const replacement = FakePeer.instances[1].channel;
