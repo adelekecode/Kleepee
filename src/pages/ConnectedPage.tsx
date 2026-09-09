@@ -44,17 +44,30 @@ export function ConnectedPage() {
     unlockAudio,
   } = useNotifications();
 
-  const seenItemsRef = useRef(new Set([...items, ...fileItems].map((item) => item.id)));
+  const prevItemCountRef = useRef(items.length + fileItems.length);
   const [dropError, setDropError] = useState<string | null>(null);
 
   // Notify on new incoming items (text or file)
   useEffect(() => {
-    const all = [...items, ...fileItems];
-    const incoming = all.filter((item) => !seenItemsRef.current.has(item.id) && item.senderId !== device.deviceId
-      && (item.type === "text" || item.status === "complete"));
-    seenItemsRef.current = new Set(all.map((item) => item.id));
-    const latest = incoming[incoming.length - 1];
-    if (latest) notify({ ...latest, type: "text", content: latest.type === "text" ? latest.content : `File received: ${latest.fileName}` }, device.deviceId);
+    const total = items.length + fileItems.length;
+    if (total > prevItemCountRef.current) {
+      const latestText = items[items.length - 1];
+      const latestFile = fileItems[fileItems.length - 1];
+      // Pick whichever is more recent
+      const latest =
+        latestFile && (!latestText || latestFile.timestamp >= latestText.timestamp)
+          ? latestFile
+          : latestText;
+      if (latest) {
+        const preview = latest.type === "text" ? latest.content : `📎 ${latest.fileName}`;
+        // Reuse notify by adapting to its TextItem-like signature
+        notify(
+          { ...latest, type: "text", content: preview, id: latest.id } as Parameters<typeof notify>[0],
+          device.deviceId,
+        );
+      }
+    }
+    prevItemCountRef.current = items.length + fileItems.length;
   }, [items, fileItems, device.deviceId, notify]);
 
   useEffect(() => {

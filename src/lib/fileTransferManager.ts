@@ -160,7 +160,6 @@ export class FileTransferManager {
         this.update(id, { progress: (index + 1) / totalChunks, receivedChunks: index + 1 }, true);
         fill();
       }
-      this.update(id, { progress: 1 });
       let timer: ReturnType<typeof setTimeout>;
       const acknowledgement = new Promise<boolean>((resolve) => {
         const finish = (ok: boolean) => { clearTimeout(timer); this.acknowledgements.delete(id); resolve(ok); };

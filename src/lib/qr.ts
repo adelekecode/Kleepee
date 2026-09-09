@@ -31,10 +31,6 @@ export function buildJoinURL(
  */
 export function parseJoinURL(url: string): { sessionId: string; sessionSecret: string } {
   const parsed = new URL(url);
-  if (!["http:", "https:"].includes(parsed.protocol) || !/^\/j\/[A-Za-z0-9]+$/.test(parsed.pathname)
-    || !/^#[A-Za-z0-9_-]+$/.test(parsed.hash) || parsed.username || parsed.password) {
-    throw new Error("Invalid Kleepee join link.");
-  }
   // pathname is /j/<sessionId>; grab the last segment
   const segments = parsed.pathname.split("/");
   const sessionId = segments[segments.length - 1];
