@@ -59,7 +59,8 @@ export function recordSession(
       peerDeviceName,
       itemCount: items.length,
       lastItemPreview: lastItem
-        ? lastItem.content.slice(0, 80) + (lastItem.content.length > 80 ? "…" : "")
+        ? lastItem.content.slice(0, 80) +
+          (lastItem.content.length > 80 ? "…" : "")
         : null,
       startedAt,
       endedAt: Date.now(),

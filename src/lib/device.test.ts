@@ -3,7 +3,11 @@
  * Requirements: 1.1, 1.2, 1.3
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { clearStoredIdentity, generateDeviceName, loadOrCreateIdentity } from "./device";
+import {
+  clearStoredIdentity,
+  generateDeviceName,
+  loadOrCreateIdentity,
+} from "./device";
 
 describe("generateDeviceName", () => {
   it("returns a string with exactly two words", () => {
@@ -63,7 +67,7 @@ describe("loadOrCreateIdentity", () => {
   it("deviceId looks like a UUID (Req 1.1)", () => {
     const { deviceId } = loadOrCreateIdentity();
     expect(deviceId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
   });
 

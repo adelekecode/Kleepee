@@ -44,7 +44,11 @@ export function QRCode({ url }: QRCodeProps) {
     <div className="flex flex-col items-center gap-4">
       <div className="grid aspect-square w-full max-w-[260px] place-items-center rounded-[18px] border border-kleepee-border bg-white p-4">
         {dataUrl ? (
-          <img className="h-full w-full" src={dataUrl} alt="Kleepee join QR code" />
+          <img
+            className="h-full w-full"
+            src={dataUrl}
+            alt="Kleepee join QR code"
+          />
         ) : (
           <div className="spinner" aria-label="Generating QR code" />
         )}

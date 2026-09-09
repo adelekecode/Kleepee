@@ -7,7 +7,7 @@ import { JoinPage } from "./pages/JoinPage";
 import { WaitingPage } from "./pages/WaitingPage";
 
 function AppFrame() {
-  const { device, hardResetApp } = useSessionContext();
+  const { device, hardResetApp, resetVersion } = useSessionContext();
 
   return (
     <div className="app-shell">
@@ -21,7 +21,7 @@ function AppFrame() {
           </div>
         </header>
 
-        <Routes>
+        <Routes key={resetVersion}>
           <Route path="/" element={<HomePage />} />
           <Route path="/waiting" element={<WaitingPage />} />
           <Route path="/j/:sessionId" element={<JoinPage />} />
@@ -30,10 +30,13 @@ function AppFrame() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
 
-        <footer className="app-footer">
-          <button className="btn-reset" type="button" onClick={hardResetApp}>
+        <footer className="app-footer flex-col items-center gap-2">
+          <button className="btn-reset" type="button" aria-describedby="reset-description" onClick={hardResetApp}>
             Reset app
           </button>
+          <p id="reset-description" className="max-w-sm text-center text-xs leading-5 text-kleepee-muted">
+            Leaves this session and clears this tab’s text and files, plus saved recent sessions.
+          </p>
         </footer>
       </div>
     </div>

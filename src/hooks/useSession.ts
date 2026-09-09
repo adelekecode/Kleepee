@@ -126,28 +126,30 @@ function readStoredSession(): StoredSession | null {
 
 function writeStoredSession(store: SessionStore): void {
   if (typeof window === "undefined") return;
-
-  if (!store.sessionId || !store.sessionSecret || !store.role || store.state === "EXPIRED") {
-    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
-    return;
+  try {
+    const ended = store.terminalReason === "manual" || store.terminalReason === "retries_exhausted";
+    if (!store.sessionId || !store.sessionSecret || !store.role || store.state === "EXPIRED" || ended) {
+      window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      return;
+    }
+    const stored: StoredSession = {
+      sessionId: store.sessionId,
+      sessionSecret: store.sessionSecret,
+      role: store.role,
+      peerDeviceName: store.peerDeviceName,
+      items: store.items,
+      initialText: store.initialText,
+      initialTextSent: store.initialTextSent,
+    };
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // A blocked or full browser store must not prevent sending or resetting.
   }
-
-  const stored: StoredSession = {
-    sessionId: store.sessionId,
-    sessionSecret: store.sessionSecret,
-    role: store.role,
-    peerDeviceName: store.peerDeviceName,
-    items: store.items,
-    initialText: store.initialText,
-    initialTextSent: store.initialTextSent,
-  };
-
-  window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(stored));
 }
 
 function clearStoredSession(): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  try { window.sessionStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* storage unavailable */ }
 }
 
 function getInitialStore(): SessionStore {
@@ -383,6 +385,7 @@ export function useSession(): UseSessionResult {
   const sessionStartedAtRef = useRef<number | null>(null);
   // Ref to always have the latest store snapshot for history recording without
   // creating stale closures inside imperative functions.
+  const historySuppressedRef = useRef(false);
   const storeRef = useRef(store);
   storeRef.current = store;
   // External handler for file frames — set by the consumer (ConnectedPage via context)
@@ -390,6 +393,7 @@ export function useSession(): UseSessionResult {
   const fileTransportRef = useRef<{ manager: WebRTCManager; transport: FileTransport } | null>(null);
 
   function restoreRefs(stored: StoredSession, deviceName: string, deviceId: string) {
+    historySuppressedRef.current = false;
     deviceNameRef.current = deviceName;
     deviceIdRef.current = deviceId;
     sessionIdRef.current = stored.sessionId;
@@ -906,6 +910,7 @@ export function useSession(): UseSessionResult {
       sessionSecretRef.current = sessionSecret;
       roleRef.current = "initiator";
       sessionStartedAtRef.current = null;
+      historySuppressedRef.current = false;
 
       dispatch({ type: "SESSION_CREATED", sessionId, sessionSecret, initialText });
       setupWebRTC(operationId);
@@ -944,6 +949,7 @@ export function useSession(): UseSessionResult {
     sessionSecretRef.current = sessionSecret;
     roleRef.current = "joiner";
     sessionStartedAtRef.current = null;
+    historySuppressedRef.current = false;
     dispatch({ type: "SESSION_JOINED", sessionId, sessionSecret });
     dispatch({ type: "PENDING", isPending: true });
 
@@ -1012,8 +1018,9 @@ export function useSession(): UseSessionResult {
   }
 
   function saveToHistory() {
+    if (historySuppressedRef.current || sessionStartedAtRef.current === null) return;
     const s = storeRef.current;
-    // Save any session that had a real sessionId and reached at least CONNECTING
+    // Only remember sessions that actually opened a DataChannel.
     if (
       s.sessionId &&
       s.sessionSecret &&
@@ -1033,6 +1040,7 @@ export function useSession(): UseSessionResult {
 
   function disconnect() {
     saveToHistory();
+    historySuppressedRef.current = true;
     operationIdRef.current += 1;
     intentionalCloseRef.current = true;
     closeTransports(true);
@@ -1041,7 +1049,10 @@ export function useSession(): UseSessionResult {
   }
 
   function reset() {
-    saveToHistory();
+    // Forget means forget: beforeunload/cleanup can run before React commits RESET.
+    historySuppressedRef.current = true;
+    storeRef.current = emptyStore;
+    sessionStartedAtRef.current = null;
     operationIdRef.current += 1;
     intentionalCloseRef.current = true;
     closeTransports(true);

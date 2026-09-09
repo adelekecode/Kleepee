@@ -10,7 +10,8 @@ interface TextCardProps {
 function formatRelativeTime(timestamp: number): string {
   const diffSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
 
-  if (diffSeconds < 60) return diffSeconds <= 1 ? "just now" : `${diffSeconds}s ago`;
+  if (diffSeconds < 60)
+    return diffSeconds <= 1 ? "just now" : `${diffSeconds}s ago`;
 
   const diffMinutes = Math.floor(diffSeconds / 60);
   if (diffMinutes < 60) return `${diffMinutes}m ago`;
@@ -23,7 +24,9 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 export function TextCard({ item }: TextCardProps) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentType = classifyContent(item.content);
 
@@ -52,8 +55,12 @@ export function TextCard({ item }: TextCardProps) {
   return (
     <article className="rounded-[18px] border border-kleepee-border bg-kleepee-surface p-4 shadow-kleepee transition duration-200 ease-out">
       <div className="flex items-center justify-between gap-4 text-xs text-kleepee-muted">
-        <span className="truncate font-medium text-kleepee-espresso">{item.senderName}</span>
-        <time dateTime={new Date(item.timestamp).toISOString()}>{formatRelativeTime(item.timestamp)}</time>
+        <span className="truncate font-medium text-kleepee-espresso">
+          {item.senderName}
+        </span>
+        <time dateTime={new Date(item.timestamp).toISOString()}>
+          {formatRelativeTime(item.timestamp)}
+        </time>
       </div>
 
       <p className="mt-3 whitespace-pre-wrap break-words text-[15px] leading-7 text-kleepee-espresso">
@@ -72,7 +79,9 @@ export function TextCard({ item }: TextCardProps) {
         )}
 
         {copyState === "failed" && (
-          <span className="text-xs text-kleepee-danger">Copy failed. Select the text manually.</span>
+          <span className="text-xs text-kleepee-danger">
+            Copy failed. Select the text manually.
+          </span>
         )}
       </div>
     </article>

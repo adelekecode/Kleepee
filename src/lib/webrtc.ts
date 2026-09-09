@@ -21,7 +21,10 @@ export class WebRTCManager {
   private failureReported = false;
   private sendWaiters = new Set<() => void>();
 
-  constructor(iceServers: RTCIceServer[] | (() => Promise<RTCIceServer[]>), callbacks: WebRTCCallbacks) {
+  constructor(
+    iceServers: RTCIceServer[] | (() => Promise<RTCIceServer[]>),
+    callbacks: WebRTCCallbacks,
+  ) {
     this.iceServers = iceServers;
     this.callbacks = callbacks;
   }
@@ -29,8 +32,12 @@ export class WebRTCManager {
   private async createPeerConnection(): Promise<RTCPeerConnection> {
     if (this.pc) this.close();
     const generation = ++this.generation;
-    const iceServers = typeof this.iceServers === "function" ? await this.iceServers() : this.iceServers;
-    if (generation !== this.generation) throw new Error("Connection attempt cancelled.");
+    const iceServers =
+      typeof this.iceServers === "function"
+        ? await this.iceServers()
+        : this.iceServers;
+    if (generation !== this.generation)
+      throw new Error("Connection attempt cancelled.");
     this.failureReported = false;
     const pc = new RTCPeerConnection({ iceServers });
     this.pc = pc;
@@ -40,12 +47,16 @@ export class WebRTCManager {
       if (pc !== this.pc) return;
       if (pc.connectionState === "failed") this.reportFailure();
       if (pc.connectionState === "disconnected") this.startConnectionTimer();
-      if (pc.connectionState === "connected" && this.dataChannel?.readyState === "open") {
+      if (
+        pc.connectionState === "connected" &&
+        this.dataChannel?.readyState === "open"
+      ) {
         this.clearConnectionTimer();
       }
     };
     pc.oniceconnectionstatechange = () => {
-      if (pc === this.pc && pc.iceConnectionState === "failed") this.reportFailure();
+      if (pc === this.pc && pc.iceConnectionState === "failed")
+        this.reportFailure();
     };
 
     pc.onicecandidate = (event) => {
@@ -99,7 +110,9 @@ export class WebRTCManager {
       }
 
       if (event.data instanceof Blob) {
-        this.callbacks.onMessage(new Uint8Array(await event.data.arrayBuffer()));
+        this.callbacks.onMessage(
+          new Uint8Array(await event.data.arrayBuffer()),
+        );
       }
     };
   }
@@ -108,7 +121,9 @@ export class WebRTCManager {
     if (!this.pc?.remoteDescription) return;
 
     const candidates = this.pendingIceCandidates.splice(0);
-    await Promise.all(candidates.map((candidate) => this.pc?.addIceCandidate(candidate)));
+    await Promise.all(
+      candidates.map((candidate) => this.pc?.addIceCandidate(candidate)),
+    );
   }
 
   /**
@@ -132,7 +147,7 @@ export class WebRTCManager {
    * The DataChannel is received via ondatachannel event.
    */
   async handleOffer(
-    offer: RTCSessionDescriptionInit
+    offer: RTCSessionDescriptionInit,
   ): Promise<RTCSessionDescriptionInit> {
     const pc = await this.createPeerConnection();
     if (pc !== this.pc) throw new Error("Connection attempt cancelled.");
@@ -194,8 +209,17 @@ export class WebRTCManager {
   /** Files wait for bounded buffer space, leaving room for interactive text. */
   async sendBuffered(data: Uint8Array, signal: AbortSignal): Promise<boolean> {
     const channel = this.dataChannel;
-    if (!channel || channel.readyState !== "open" || signal.aborted || data.byteLength > this.maxMessageSize) return false;
-    while (channel.bufferedAmount + data.byteLength > Math.max(FILE_BUFFER_HIGH, data.byteLength)) {
+    if (
+      !channel ||
+      channel.readyState !== "open" ||
+      signal.aborted ||
+      data.byteLength > this.maxMessageSize
+    )
+      return false;
+    while (
+      channel.bufferedAmount + data.byteLength >
+      Math.max(FILE_BUFFER_HIGH, data.byteLength)
+    ) {
       const ready = await new Promise<boolean>((resolve) => {
         const finish = (ok: boolean) => {
           clearTimeout(timer);
@@ -218,7 +242,13 @@ export class WebRTCManager {
         if (signal.aborted || channel.readyState !== "open") closed();
         else if (channel.bufferedAmount <= FILE_BUFFER_LOW) drained();
       });
-      if (!ready || signal.aborted || this.dataChannel !== channel || channel.readyState !== "open") return false;
+      if (
+        !ready ||
+        signal.aborted ||
+        this.dataChannel !== channel ||
+        channel.readyState !== "open"
+      )
+        return false;
     }
     if (signal.aborted || this.dataChannel !== channel) return false;
     return this.send(data);

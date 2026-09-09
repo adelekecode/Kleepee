@@ -36,8 +36,9 @@ export async function deriveKey(sessionSecret: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
 
   // Import the raw secret bytes as HKDF key material
-  const rawBytes = Uint8Array.from(atob(sessionSecret.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
-    c.charCodeAt(0)
+  const rawBytes = Uint8Array.from(
+    atob(sessionSecret.replace(/-/g, "+").replace(/_/g, "/")),
+    (c) => c.charCodeAt(0),
   );
 
   const keyMaterial = await crypto.subtle.importKey(
@@ -45,7 +46,7 @@ export async function deriveKey(sessionSecret: string): Promise<CryptoKey> {
     rawBytes,
     { name: "HKDF" },
     false,
-    ["deriveKey"]
+    ["deriveKey"],
   );
 
   // Derive the AES-GCM key via HKDF
@@ -59,7 +60,7 @@ export async function deriveKey(sessionSecret: string): Promise<CryptoKey> {
     keyMaterial,
     { name: "AES-GCM", length: 256 },
     false,
-    ["encrypt", "decrypt"]
+    ["encrypt", "decrypt"],
   );
 }
 
@@ -69,18 +70,24 @@ export async function deriveKey(sessionSecret: string): Promise<CryptoKey> {
  *
  * Requirements: 5.2, 5.3
  */
-export async function encrypt(key: CryptoKey, plaintext: string): Promise<Uint8Array> {
+export async function encrypt(
+  key: CryptoKey,
+  plaintext: string,
+): Promise<Uint8Array> {
   return encryptBytes(key, new TextEncoder().encode(plaintext));
 }
 
-export async function encryptBytes(key: CryptoKey, encodedPlaintext: Uint8Array): Promise<Uint8Array> {
+export async function encryptBytes(
+  key: CryptoKey,
+  encodedPlaintext: Uint8Array,
+): Promise<Uint8Array> {
   const iv = new Uint8Array(IV_LENGTH);
   crypto.getRandomValues(iv);
 
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    encodedPlaintext
+    encodedPlaintext,
   );
 
   // Concatenate IV and ciphertext into a single Uint8Array
@@ -96,19 +103,26 @@ export async function encryptBytes(key: CryptoKey, encodedPlaintext: Uint8Array)
  *
  * Requirements: 5.2, 5.3
  */
-export async function decrypt(key: CryptoKey, data: Uint8Array): Promise<string> {
+export async function decrypt(
+  key: CryptoKey,
+  data: Uint8Array,
+): Promise<string> {
   return new TextDecoder().decode(await decryptBytes(key, data));
 }
 
-export async function decryptBytes(key: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
-  if (data.byteLength < IV_LENGTH + 16) throw new Error("Truncated encrypted message.");
+export async function decryptBytes(
+  key: CryptoKey,
+  data: Uint8Array,
+): Promise<Uint8Array> {
+  if (data.byteLength < IV_LENGTH + 16)
+    throw new Error("Truncated encrypted message.");
   const iv = data.slice(0, IV_LENGTH);
   const ciphertext = data.slice(IV_LENGTH);
 
   const plaintext = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv },
     key,
-    ciphertext
+    ciphertext,
   );
 
   return new Uint8Array(plaintext);

@@ -14,7 +14,13 @@ interface TextFeedProps {
 
 const SCROLL_TOLERANCE = 80;
 
-export function TextFeed({ items, transfers, onCancelTransfer, onRetryTransfer, onDropFiles }: TextFeedProps) {
+export function TextFeed({
+  items,
+  transfers,
+  onCancelTransfer,
+  onRetryTransfer,
+  onDropFiles,
+}: TextFeedProps) {
   const feedRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
@@ -22,7 +28,9 @@ export function TextFeed({ items, transfers, onCancelTransfer, onRetryTransfer, 
 
   const byId = new Map<string, FeedItem>(items.map((item) => [item.id, item]));
   transfers?.forEach((transfer) => byId.set(transfer.id, transfer));
-  const combinedItems = [...byId.values()].sort((a, b) => a.timestamp - b.timestamp);
+  const combinedItems = [...byId.values()].sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
   const totalCount = combinedItems.length;
   const itemIds = combinedItems.map((item) => item.id).join("|");
 
@@ -36,8 +44,13 @@ export function TextFeed({ items, transfers, onCancelTransfer, onRetryTransfer, 
   }
 
   function scrollToLatest(behavior: ScrollBehavior = "smooth") {
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    bottomRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : behavior, block: "end" });
+    const reduceMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    bottomRef.current?.scrollIntoView({
+      behavior: reduceMotion ? "auto" : behavior,
+      block: "end",
+    });
     setHasNew(false);
   }
 
@@ -47,7 +60,7 @@ export function TextFeed({ items, transfers, onCancelTransfer, onRetryTransfer, 
       return;
     }
     if (totalCount > 0) setHasNew(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemIds]);
 
   const isEmpty = totalCount === 0;
@@ -58,8 +71,15 @@ export function TextFeed({ items, transfers, onCancelTransfer, onRetryTransfer, 
         ref={feedRef}
         className="h-full max-h-[55dvh] min-h-[220px] overflow-y-auto focus:outline-none focus:ring-2 focus:ring-kleepee-focus rounded-[24px] border border-kleepee-border bg-kleepee-panel/75 p-3"
         onScroll={updateScrollPosition}
-        onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
-        onDrop={(event) => { event.preventDefault(); if (event.dataTransfer.files.length) onDropFiles?.(Array.from(event.dataTransfer.files)); }}
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes("Files"))
+            event.preventDefault();
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          if (event.dataTransfer.files.length)
+            onDropFiles?.(Array.from(event.dataTransfer.files));
+        }}
         tabIndex={0}
         role="region"
         aria-label="Shared text and files"
@@ -74,8 +94,13 @@ export function TextFeed({ items, transfers, onCancelTransfer, onRetryTransfer, 
               item.type === "text" ? (
                 <TextCard key={item.id} item={item} />
               ) : (
-                <FileCard key={item.id} item={item} onCancel={onCancelTransfer} onRetry={onRetryTransfer} />
-              )
+                <FileCard
+                  key={item.id}
+                  item={item}
+                  onCancel={onCancelTransfer}
+                  onRetry={onRetryTransfer}
+                />
+              ),
             )}
           </div>
         )}

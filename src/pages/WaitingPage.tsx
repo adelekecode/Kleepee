@@ -4,7 +4,11 @@ import { QRCode } from "../components/QRCode";
 import { StatusBar } from "../components/StatusBar";
 import { buildJoinURL } from "../lib/qr";
 import { useSessionContext } from "../context/SessionContext";
-import { getNotificationPermission, requestNotificationPermission, systemNotificationsSupported } from "../lib/notifications";
+import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  systemNotificationsSupported,
+} from "../lib/notifications";
 
 export function WaitingPage() {
   const navigate = useNavigate();
@@ -25,7 +29,9 @@ export function WaitingPage() {
     return buildJoinURL(sessionId, sessionSecret);
   }, [sessionId, sessionSecret]);
 
-  const [notifPermission, setNotifPermission] = useState(() => getNotificationPermission());
+  const [notifPermission, setNotifPermission] = useState(() =>
+    getNotificationPermission(),
+  );
 
   async function handleEnableNotifications() {
     const result = await requestNotificationPermission();
@@ -56,7 +62,11 @@ export function WaitingPage() {
       <section className="panel flex flex-col gap-6 text-center">
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold text-kleepee-espresso">
-            {state === "CONNECTING" ? "Connecting securely..." : state === "DISCONNECTED" ? "Connection interrupted" : "Waiting for another device..."}
+            {state === "CONNECTING"
+              ? "Connecting securely..."
+              : state === "DISCONNECTED"
+                ? "Connection interrupted"
+                : "Waiting for another device..."}
           </h1>
           <p className="mx-auto max-w-sm text-sm leading-6 text-kleepee-muted">
             {state === "CONNECTING"
@@ -84,14 +94,20 @@ export function WaitingPage() {
 
         {initialText && (
           <div className="rounded-[18px] border border-kleepee-border bg-kleepee-panel p-4 text-left">
-            <p className="text-xs font-medium uppercase tracking-[0.12em] text-kleepee-muted">Preview</p>
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-kleepee-muted">
+              Preview
+            </p>
             <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm leading-6 text-kleepee-espresso">
               {initialText}
             </p>
           </div>
         )}
 
-        <button className="btn-danger self-center" type="button" onClick={cancelSession}>
+        <button
+          className="btn-danger self-center"
+          type="button"
+          onClick={cancelSession}
+        >
           Cancel
         </button>
 

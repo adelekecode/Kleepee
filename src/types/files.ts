@@ -1,4 +1,10 @@
-export type FileTransferStatus = "queued" | "sending" | "receiving" | "complete" | "failed" | "cancelled";
+export type FileTransferStatus =
+  | "queued"
+  | "sending"
+  | "receiving"
+  | "complete"
+  | "failed"
+  | "cancelled";
 
 /** File bytes and object URLs are never persisted. */
 export interface FileItem {
@@ -40,10 +46,13 @@ export interface FileChunkFrame {
   index: number;
   data: Uint8Array;
 }
-export type FileFrame = FileStartFrame | FileChunkFrame | {
-  type: "file.complete" | "file.cancel" | "file.ack" | "file.reject";
-  id: string;
-};
+export type FileFrame =
+  | FileStartFrame
+  | FileChunkFrame
+  | {
+      type: "file.complete" | "file.cancel" | "file.ack" | "file.reject";
+      id: string;
+    };
 
 export interface PreparedFileFrame {
   send: () => Promise<boolean>;
@@ -53,7 +62,10 @@ export interface FileTransport {
   chunkSize: number;
   send: (frame: FileFrame, signal: AbortSignal) => Promise<boolean>;
   /** Encrypt ahead of time; sending still occurs in file-chunk order. */
-  prepare?: (frame: FileFrame, signal: AbortSignal) => Promise<PreparedFileFrame>;
+  prepare?: (
+    frame: FileFrame,
+    signal: AbortSignal,
+  ) => Promise<PreparedFileFrame>;
 }
 
 export interface FileSelectionResult {
