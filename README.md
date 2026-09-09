@@ -324,3 +324,29 @@ Installation does not grant indefinite background execution or move WebRTC into
 the service worker. The same OS suspension limits apply to installed web apps.
 Verify installation/standalone launch, offline shell loading after first use,
 deep links, and updating while another tab has an active session on real devices.
+
+
+### Connection setup and iOS notifications
+
+Join setup is protected from foreground recovery until its encryption key is
+ready. Duplicate concurrent joins share one setup operation. Setup requests
+(including response bodies) have a 20-second foreground timeout and are aborted
+on reset. The composer’s pending flag covers setup, not the whole reconnection
+period. Temporary join failures offer Try again without resetting the app.
+
+Notification capability checks no longer construct blank notifications. Mobile
+notifications use the active service worker's showNotification API; permission
+is requested directly from the Enable notifications button. On iOS, launch the
+installed Home Screen app before enabling notifications (iOS/iPadOS 16.4+).
+Notification clicks focus an existing app window without reloading its session.
+Foreground toasts and sounds remain best effort, and failed/canceled files do
+not generate delivery notifications.
+
+This is notification display for messages the running app receives. No Web Push
+subscription/server was added: notifications cannot wake suspended WebRTC or
+guarantee delivery while iOS has stopped the app. See
+https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/ .
+
+After deploying, close all Kleepee tabs/app windows and reopen them so a waiting
+service worker update can activate. Re-enable notifications from the installed
+app if needed; denied permission must be changed in the device's settings.

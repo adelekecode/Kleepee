@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { backgroundTimeout } from "../lib/backgroundTimeout";
+import { sessionRequest } from "../lib/sessionRequest";
 import { WebRTCManager } from "../lib/webrtc";
 import { createIceServerLoader } from "../lib/iceServers";
 import { deriveKey, encrypt, decryptBytes, encryptBytes, generateSessionSecret } from "../lib/crypto";
@@ -31,6 +32,7 @@ export type SessionErrorCode =
   | "session_not_found"
   | "not_connected"
   | "connection_failed"
+  | "operation_cancelled"
   | "send_failed";
 
 export type TerminalDisconnectReason =
@@ -243,6 +245,7 @@ function reducer(store: SessionStore, action: Action): SessionStore {
       return {
         ...store,
         state: "DISCONNECTED",
+        isPending: false,
         retryAttempt: action.retryAttempt,
         terminalReason: action.reason,
       };
@@ -314,7 +317,7 @@ function makeError(code: SessionErrorCode, message: string, status?: number): Se
 }
 
 function cancelledOperation(): SessionActionResult {
-  return { ok: false, error: makeError("connection_failed", "Session changed before connecting.") };
+  return { ok: false, error: makeError("operation_cancelled", "Session changed before connecting.") };
 }
 
 function validateText(text: string): SessionError | null {
@@ -377,6 +380,8 @@ export function useSession(): UseSessionResult {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCountRef = useRef(0);
   const operationIdRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const joinFlightRef = useRef<{ key: string; operationId: number; promise: Promise<SessionActionResult> } | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const sessionSecretRef = useRef<string | null>(null);
   const roleRef = useRef<"initiator" | "joiner" | null>(null);
@@ -462,6 +467,8 @@ export function useSession(): UseSessionResult {
   }
 
   function closeTransports(clearKey: boolean) {
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
     clearSignalingRetry();
     clearRetryTimer();
     clearHeartbeatTimer();
@@ -495,7 +502,10 @@ export function useSession(): UseSessionResult {
       return { ok: false, error: validationError };
     }
 
-    if (!cryptoKeyRef.current || !rtcRef.current || rtcRef.current.dataChannelState !== "open") {
+    const key = cryptoKeyRef.current;
+    const manager = rtcRef.current;
+    const operationId = operationIdRef.current;
+    if (!key || !manager || manager.dataChannelState !== "open") {
       const error = makeError("not_connected", "Not connected.");
       dispatch({ type: "ERROR", error });
       return { ok: false, error };
@@ -511,8 +521,9 @@ export function useSession(): UseSessionResult {
     };
 
     try {
-      const payload = await encrypt(cryptoKeyRef.current, JSON.stringify(item));
-      const sent = rtcRef.current.send(payload);
+      const payload = await encrypt(key, JSON.stringify(item));
+      if (operationId !== operationIdRef.current || rtcRef.current !== manager) return cancelledOperation();
+      const sent = manager.send(payload);
 
       if (!sent) {
         const error = makeError("send_failed", "Could not send that text. Try again.");
@@ -524,6 +535,7 @@ export function useSession(): UseSessionResult {
       dispatch({ type: "CLEAR_ERROR" });
       return { ok: true };
     } catch {
+      if (operationId !== operationIdRef.current || rtcRef.current !== manager) return cancelledOperation();
       const error = makeError("send_failed", "Could not send that text. Try again.");
       dispatch({ type: "ERROR", error });
       return { ok: false, error };
@@ -531,7 +543,7 @@ export function useSession(): UseSessionResult {
   }
 
   function scheduleReconnect(reason: TerminalDisconnectReason) {
-    if (intentionalCloseRef.current || !sessionIdRef.current || !sessionSecretRef.current) {
+    if (intentionalCloseRef.current || !cryptoKeyRef.current || !sessionIdRef.current || !sessionSecretRef.current) {
       return;
     }
 
@@ -567,7 +579,7 @@ export function useSession(): UseSessionResult {
   }
 
   function scheduleRTCReconnect() {
-    if (intentionalCloseRef.current || retryTimerRef.current) return;
+    if (intentionalCloseRef.current || !cryptoKeyRef.current || retryTimerRef.current) return;
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       scheduleReconnect("network");
       return;
@@ -695,6 +707,8 @@ export function useSession(): UseSessionResult {
         dispatch({ type: "CHANNEL_STATE", dataChannelState: channelState });
 
         if (channelState === "open") {
+          clearJoinOfferTimer();
+          clearRetryTimer();
           retryCountRef.current = 0;
           sessionStartedAtRef.current = sessionStartedAtRef.current ?? Date.now();
           startHeartbeat();
@@ -865,6 +879,7 @@ export function useSession(): UseSessionResult {
 
       if (event.code === 4410) {
         operationIdRef.current += 1;
+        intentionalCloseRef.current = true;
         saveToHistory();
         dispatch({ type: "EXPIRED" });
         closeTransports(true);
@@ -873,6 +888,8 @@ export function useSession(): UseSessionResult {
 
       if (event.code === 4409) {
         const error = makeError("session_full", "This session already has two devices.", 409);
+        intentionalCloseRef.current = true;
+        closeTransports(false);
         dispatch({ type: "ERROR", error });
         dispatch({ type: "DISCONNECTED", reason: "network" });
         return;
@@ -883,20 +900,25 @@ export function useSession(): UseSessionResult {
     };
   }
 
-  async function checkJoinable(sessionId: string): Promise<SessionActionResult> {
+  async function checkJoinable(sessionId: string, signal: AbortSignal): Promise<SessionActionResult> {
     try {
-      const response = await fetch(`${WORKER_BASE}/sessions/${encodeURIComponent(sessionId)}?deviceId=${encodeURIComponent(deviceIdRef.current)}`);
+      const { response, body: payload } = await sessionRequest(`${WORKER_BASE}/sessions/${encodeURIComponent(sessionId)}?deviceId=${encodeURIComponent(deviceIdRef.current)}`, {}, signal);
 
       if (!response.ok) {
         const error = mapJoinStatus(response.status);
         return { ok: false, error };
       }
 
-      const body = (await response.json().catch(() => null)) as {
+      const body = payload as {
         sessionState?: SessionState;
         deviceCount?: number;
         canJoin?: boolean;
       } | null;
+
+      if (!body || typeof body.deviceCount !== "number" || !Number.isSafeInteger(body.deviceCount) || body.deviceCount < 0 ||
+        !["WAITING", "CONNECTING", "CONNECTED", "DISCONNECTED", "EXPIRED"].includes(body.sessionState ?? "")) {
+        return { ok: false, error: makeError("connection_failed", "The session server returned an invalid response. Try again.") };
+      }
 
       if (body?.sessionState === "EXPIRED") {
         const error = makeError("session_expired", "This session has expired.", 410);
@@ -908,14 +930,14 @@ export function useSession(): UseSessionResult {
         return { ok: false, error };
       }
 
-      if (typeof body?.deviceCount === "number" && body.deviceCount === 0) {
+      if (body.deviceCount === 0 && body.sessionState !== "DISCONNECTED" && body.sessionState !== "CONNECTED") {
         const error = makeError("session_not_found", "Session not found.", 404);
         return { ok: false, error };
       }
 
       return { ok: true };
     } catch {
-      return { ok: true };
+      return { ok: false, error: makeError("connection_failed", "Could not reach this session. Check your connection and try again.") };
     }
   }
 
@@ -942,9 +964,12 @@ export function useSession(): UseSessionResult {
     deviceIdRef.current = deviceId;
     initialTextRef.current = initialText;
     dispatch({ type: "PENDING", isPending: true });
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
 
     try {
-      const response = await fetch(`${WORKER_BASE}/sessions`, { method: "POST" });
+      const { response, body } = await sessionRequest(`${WORKER_BASE}/sessions`, { method: "POST" }, controller.signal);
+      if (operationId !== operationIdRef.current) return cancelledOperation();
 
       if (!response.ok) {
         const error = makeError("create_failed", "Could not create a session.", response.status);
@@ -952,7 +977,8 @@ export function useSession(): UseSessionResult {
         return { ok: false, error };
       }
 
-      const { sessionId } = (await response.json()) as { sessionId: string };
+      const sessionId = (body as { sessionId?: unknown } | null)?.sessionId;
+      if (typeof sessionId !== "string" || !/^[A-Za-z0-9-]+$/.test(sessionId)) throw new Error("Invalid session response.");
       const sessionSecret = generateSessionSecret();
       const key = await deriveKey(sessionSecret);
       if (operationId !== operationIdRef.current) return cancelledOperation();
@@ -971,13 +997,34 @@ export function useSession(): UseSessionResult {
       openWebSocket(sessionId, operationId);
       return { ok: true };
     } catch {
+      if (operationId !== operationIdRef.current) return cancelledOperation();
       const error = makeError("create_failed", "Could not create a session.");
       dispatch({ type: "ERROR", error });
       return { ok: false, error };
+    } finally {
+      if (operationId === operationIdRef.current) dispatch({ type: "PENDING", isPending: false });
     }
   }
 
-  async function joinSession(
+  function joinSession(sessionId: string, sessionSecret: string, deviceName: string, deviceId: string): Promise<SessionActionResult> {
+    const key = JSON.stringify([sessionId, sessionSecret, deviceId]);
+    const flight = joinFlightRef.current;
+    if (flight?.key === key && flight.operationId === operationIdRef.current) return flight.promise;
+    if (!intentionalCloseRef.current && cryptoKeyRef.current && roleRef.current === "joiner" &&
+      sessionIdRef.current === sessionId && sessionSecretRef.current === sessionSecret &&
+      deviceIdRef.current === deviceId && (rtcRef.current || wsRef.current || retryTimerRef.current)) {
+      return Promise.resolve({ ok: true });
+    }
+    const promise = performJoin(sessionId, sessionSecret, deviceName, deviceId);
+    const next = { key, operationId: operationIdRef.current, promise };
+    joinFlightRef.current = next;
+    void promise.finally(() => {
+      if (joinFlightRef.current === next) joinFlightRef.current = null;
+    });
+    return promise;
+  }
+
+  async function performJoin(
     sessionId: string,
     sessionSecret: string,
     deviceName: string,
@@ -1008,10 +1055,13 @@ export function useSession(): UseSessionResult {
     setPeerBackground(false);
     dispatch({ type: "SESSION_JOINED", sessionId, sessionSecret });
     dispatch({ type: "PENDING", isPending: true });
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
 
-    const joinable = await checkJoinable(sessionId);
+    const joinable = await checkJoinable(sessionId, controller.signal);
     if (operationId !== operationIdRef.current) return cancelledOperation();
     if (!joinable.ok) {
+      intentionalCloseRef.current = true;
       dispatch({ type: "ERROR", error: joinable.error });
       dispatch({ type: "DISCONNECTED", reason: "network" });
       return joinable;
@@ -1025,10 +1075,14 @@ export function useSession(): UseSessionResult {
       openWebSocket(sessionId, operationId);
       return { ok: true };
     } catch {
+      if (operationId !== operationIdRef.current) return cancelledOperation();
+      intentionalCloseRef.current = true;
       const error = makeError("join_invalid", "This link is not valid.");
       dispatch({ type: "ERROR", error });
       dispatch({ type: "DISCONNECTED", reason: "network" });
       return { ok: false, error };
+    } finally {
+      if (operationId === operationIdRef.current) dispatch({ type: "PENDING", isPending: false });
     }
   }
 
@@ -1066,10 +1120,14 @@ export function useSession(): UseSessionResult {
       openWebSocket(stored.sessionId, operationId);
       return { ok: true };
     } catch {
+      if (operationId !== operationIdRef.current) return cancelledOperation();
+      intentionalCloseRef.current = true;
       const error = makeError("join_invalid", "This saved session is not valid.");
       dispatch({ type: "ERROR", error });
       clearStoredSession();
       return { ok: false, error };
+    } finally {
+      if (operationId === operationIdRef.current) dispatch({ type: "PENDING", isPending: false });
     }
   }
 
@@ -1168,17 +1226,17 @@ export function useSession(): UseSessionResult {
       saveToHistory();
     }
     function recoverForeground() {
-      if (document.visibilityState === "hidden" || intentionalCloseRef.current || !sessionIdRef.current) return;
+      if (document.visibilityState === "hidden" || intentionalCloseRef.current || !sessionIdRef.current || !cryptoKeyRef.current) return;
       sendPresence();
       rtcRef.current?.recover();
       if (rtcRef.current?.dataChannelState === "open") {
         if (!wsRef.current || wsRef.current.readyState >= WebSocket.CLOSING) reconnectSignaling();
         return;
       }
-      if (retryTimerRef.current) return;
+      if (retryTimerRef.current || wsRef.current?.readyState === WebSocket.CONNECTING) return;
       if (!wsRef.current || wsRef.current.readyState >= WebSocket.CLOSING) scheduleReconnect("network");
-      else if (roleRef.current === "joiner") startJoinOfferTimer(operationIdRef.current, wsRef.current);
-      else scheduleRTCReconnect();
+      else if (roleRef.current === "joiner" && rtcRef.current?.dataChannelState !== "connecting") startJoinOfferTimer(operationIdRef.current, wsRef.current);
+      else if (!rtcRef.current) scheduleRTCReconnect();
     }
     function visibilityChanged() {
       if (document.visibilityState === "hidden") sendPresence();

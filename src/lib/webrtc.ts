@@ -78,7 +78,11 @@ export class WebRTCManager {
 
   private startConnectionTimer(): void {
     if (this.connectionTimer !== null) return;
-    this.connectionTimer = backgroundTimeout(() => this.reportFailure(), 15_000, () => this.peerBackground);
+    this.connectionTimer = backgroundTimeout(
+      () => this.reportFailure(),
+      15_000,
+      () => this.peerBackground,
+    );
   }
 
   private reportFailure(): void {
@@ -235,7 +239,11 @@ export class WebRTCManager {
         };
         const drained = () => finish(true);
         const closed = () => finish(false);
-        const cancelDeadline = backgroundTimeout(closed, 60_000, () => this.peerBackground);
+        const cancelDeadline = backgroundTimeout(
+          closed,
+          60_000,
+          () => this.peerBackground,
+        );
         this.sendWaiters.add(closed);
         channel.bufferedAmountLowThreshold = FILE_BUFFER_LOW;
         channel.addEventListener("bufferedamountlow", drained, { once: true });
@@ -264,7 +272,10 @@ export class WebRTCManager {
   /** Recheck after foregrounding; do not replace a healthy DataChannel. */
   recover(): void {
     if (!this.pc) return;
-    if (this.pc.connectionState === "failed" || this.dataChannel?.readyState === "closed") {
+    if (
+      this.pc.connectionState === "failed" ||
+      this.dataChannel?.readyState === "closed"
+    ) {
       this.reportFailure();
     } else if (this.pc.connectionState === "disconnected") {
       this.clearConnectionTimer();
