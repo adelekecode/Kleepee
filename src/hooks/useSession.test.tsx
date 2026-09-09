@@ -111,11 +111,26 @@ function renderSessionHook() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function storedSession() {
+  window.sessionStorage.setItem("kleepee.session.current", JSON.stringify({
+    sessionId: "2MFHNJ", sessionSecret: "secret", role: "joiner",
+    peerDeviceName: null, items: [], initialText: null, initialTextSent: true,
+  }));
+}
+
 describe("useSession join recovery", () => {
   let hook: ReturnType<typeof renderSessionHook> | null = null;
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.clearAllMocks();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     window.sessionStorage.clear();
@@ -161,6 +176,245 @@ describe("useSession join recovery", () => {
     expect(hook.current.items).toHaveLength(1);
     expect(window.sessionStorage.getItem("kleepee.session.current")).not.toBeNull();
   }
+
+  it.each(["status request", "key derivation"])("ignores foreground recovery while join %s is pending", async (stage) => {
+    const response = deferred<Response>();
+    const key = deferred<CryptoKey>();
+    if (stage === "status request") vi.mocked(fetch).mockReturnValueOnce(response.promise);
+    else cryptoMocks.deriveKey.mockReturnValueOnce(key.promise);
+    hook = renderSessionHook();
+    let joining!: ReturnType<UseSessionResult["joinSession"]>;
+    await act(async () => { joining = hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2"); });
+    expect(hook.current.isPending).toBe(true);
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(rtcMocks.instances).toHaveLength(0);
+    expect(hook.current.retryAttempt).toBe(0);
+    expect(hook.current.isPending).toBe(true);
+    await act(async () => {
+      if (stage === "status request") response.resolve(new Response(JSON.stringify({ sessionState: "WAITING", deviceCount: 1 })));
+      else key.resolve({} as CryptoKey);
+      expect(await joining).toEqual({ ok: true });
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rtcMocks.instances).toHaveLength(1);
+    expect(hook.current.isPending).toBe(false);
+  });
+
+  it.each(["create", "join", "restore"] as const)("clears %s pending state after setup without waiting for an open data channel", async (operation) => {
+    const key = deferred<CryptoKey>();
+    cryptoMocks.deriveKey.mockReturnValueOnce(key.promise);
+    if (operation === "restore") storedSession();
+    if (operation === "create") vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: "2MFHNJ" })));
+    hook = renderSessionHook();
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = operation === "create"
+        ? hook!.current.createSession("First text", "Second Device", "device-2")
+        : operation === "join"
+          ? hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2")
+          : hook!.current.resumeStoredSession("Second Device", "device-2");
+    });
+    expect(hook.current.isPending).toBe(true);
+    await act(async () => { key.resolve({} as CryptoKey); expect(await pending).toEqual({ ok: true }); });
+    expect(hook.current.isPending).toBe(false);
+    expect(hook.current.dataChannelState).not.toBe("open");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rtcMocks.instances).toHaveLength(1);
+  });
+
+  it("keeps operation pending false while reconnecting a lost data channel", async () => {
+    await connectWithText();
+    await act(async () => {
+      const rtc = rtcMocks.instances[0];
+      rtc.dataChannelState = "closed";
+      rtc.callbacks.onStateChange("closed");
+    });
+    expect(hook!.current.retryAttempt).toBe(1);
+    expect(hook!.current.isPending).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(hook!.current.isPending).toBe(false);
+  });
+
+  it.each(["create request", "join request", "create key", "join key", "restore key"])("ignores a stale failed %s after reset", async (operation) => {
+    const response = deferred<Response>();
+    const key = deferred<CryptoKey>();
+    const requestPending = operation.endsWith("request");
+    if (requestPending) vi.mocked(fetch).mockReturnValueOnce(response.promise);
+    else {
+      cryptoMocks.deriveKey.mockReturnValueOnce(key.promise);
+      if (operation === "create key") vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: "2MFHNJ" })));
+    }
+    if (operation === "restore key") storedSession();
+    hook = renderSessionHook();
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = operation.startsWith("create")
+        ? hook!.current.createSession("First text", "Second Device", "device-2")
+        : operation.startsWith("join")
+          ? hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2")
+          : hook!.current.resumeStoredSession("Second Device", "device-2");
+    });
+    act(() => hook!.current.reset());
+    await act(async () => {
+      if (requestPending) response.reject(new Error("Late network failure"));
+      else key.reject(new Error("Late key failure"));
+      await pending;
+    });
+    expect(hook.current.sessionId).toBeNull();
+    expect(hook.current.error).toBeNull();
+    expect(hook.current.isPending).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(rtcMocks.instances).toHaveLength(0);
+  });
+
+  it("deduplicates concurrent joins and allows joining the same link after reset", async () => {
+    const response = deferred<Response>();
+    vi.mocked(fetch).mockReturnValueOnce(response.promise);
+    hook = renderSessionHook();
+    let first!: ReturnType<UseSessionResult["joinSession"]>;
+    let second!: ReturnType<UseSessionResult["joinSession"]>;
+    await act(async () => {
+      first = hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2");
+      second = hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2");
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      response.resolve(new Response(JSON.stringify({ sessionState: "WAITING", deviceCount: 1 })));
+      expect(await first).toEqual({ ok: true });
+      expect(await second).toEqual({ ok: true });
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rtcMocks.instances).toHaveLength(1);
+    expect(cryptoMocks.deriveKey).toHaveBeenCalledTimes(1);
+    act(() => hook!.current.reset());
+    await act(async () => {
+      expect(await hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2")).toEqual({ ok: true });
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(rtcMocks.instances).toHaveLength(2);
+    expect(hook.current.isPending).toBe(false);
+  });
+
+  it.each([
+    ["create", "headers"], ["create", "body"], ["join", "headers"], ["join", "body"],
+  ] as const)("bounds a hanging %s %s request to 20 seconds and clears pending", async (operation, stage) => {
+    if (stage === "headers") vi.mocked(fetch).mockReturnValueOnce(new Promise(() => {}));
+    else {
+      const response = new Response("{}");
+      vi.spyOn(response, "json").mockReturnValueOnce(new Promise(() => {}));
+      vi.mocked(fetch).mockResolvedValueOnce(response);
+    }
+    hook = renderSessionHook();
+    const finished = vi.fn();
+    await act(async () => {
+      const pending = operation === "create"
+        ? hook!.current.createSession("Text to keep", "Second Device", "device-2")
+        : hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2");
+      void pending.then(finished);
+    });
+    expect(hook.current.isPending).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(19_999); });
+    expect(finished).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(finished).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+    expect(hook.current.isPending).toBe(false);
+    expect(hook.current.error).not.toBeNull();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(rtcMocks.instances).toHaveLength(0);
+  });
+
+  it.each(["create", "join"] as const)("reset settles a %s request even when fetch ignores abort and never resolves", async (operation) => {
+    vi.mocked(fetch).mockReturnValueOnce(new Promise(() => {}));
+    hook = renderSessionHook();
+    const finished = vi.fn();
+    await act(async () => {
+      const pending = operation === "create"
+        ? hook!.current.createSession("Text", "Second Device", "device-2")
+        : hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2");
+      void pending.then(finished);
+    });
+    expect(finished).not.toHaveBeenCalled();
+    await act(async () => { hook!.current.reset(); });
+    expect(finished).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+    expect(hook.current.isPending).toBe(false);
+    expect(hook.current.error).toBeNull();
+    expect(hook.current.sessionId).toBeNull();
+  });
+
+  it("does not replace the initiator's negotiating connection on foreground with open signaling", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: "2MFHNJ" })));
+    hook = renderSessionHook();
+    await act(async () => {
+      await hook!.current.createSession("First text", "Second Device", "device-2");
+      FakeWebSocket.instances[0].open();
+      rtcMocks.instances[0].dataChannelState = "connecting";
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(rtcMocks.instances).toHaveLength(1);
+    expect(rtcMocks.instances[0].close).not.toHaveBeenCalled();
+    expect(rtcMocks.instances[0].createOffer).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(hook.current.retryAttempt).toBe(0);
+    expect(hook.current.isPending).toBe(false);
+  });
+
+  it("cannot resurrect transports after a rejected join when pageshow or online fires", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("{}", { status: 404 }));
+    hook = renderSessionHook();
+    await act(async () => {
+      expect(await hook!.current.joinSession("2MFHNJ", "secret", "Second Device", "device-2")).toMatchObject({ ok: false });
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("online"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(rtcMocks.instances).toHaveLength(0);
+    expect(hook.current.isPending).toBe(false);
+    expect(hook.current.error?.code).toBe("session_not_found");
+  });
+
+  it.each(["reset", "new session"] as const)("never sends stale encrypted text after %s", async (operation) => {
+    await connectWithText();
+    const oldRtc = rtcMocks.instances[0];
+    oldRtc.send.mockClear();
+    const encryption = deferred<Uint8Array>();
+    const staleBytes = new Uint8Array([17, 29, 43]);
+    cryptoMocks.encrypt.mockReturnValueOnce(encryption.promise);
+    let pending!: ReturnType<UseSessionResult["sendText"]>;
+    await act(async () => { pending = hook!.current.sendText("Stale draft", "Second Device", "device-2"); });
+    await act(async () => {
+      hook!.current.reset();
+      if (operation === "new session") {
+        await hook!.current.joinSession("NEW456", "new-secret", "Second Device", "device-2");
+        FakeWebSocket.instances[1].open();
+        const freshRtc = rtcMocks.instances[1];
+        freshRtc.dataChannelState = "open";
+        freshRtc.callbacks.onStateChange("open");
+      }
+    });
+    await act(async () => {
+      encryption.resolve(staleBytes);
+      expect(await pending).toMatchObject({ ok: false });
+    });
+    expect(oldRtc.send).not.toHaveBeenCalledWith(staleBytes);
+    if (operation === "new session") {
+      expect(rtcMocks.instances[1].send).not.toHaveBeenCalledWith(staleBytes);
+      expect(hook!.current.sessionId).toBe("NEW456");
+    }
+    expect(hook!.current.items).toEqual([]);
+    expect(hook!.current.error).toBeNull();
+  });
 
   it("keeps an open data channel connected while the page is hidden", async () => {
     await connectWithText();

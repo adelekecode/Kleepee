@@ -27,7 +27,11 @@ function worker() {
   const reload = vi.fn();
   const self = {
     location: { origin, reload },
-    clients: { claim, matchAll: vi.fn(async () => [{ navigate: reload }]) },
+    clients: {
+      claim,
+      matchAll: vi.fn(async (): Promise<{ url: string; focus: ReturnType<typeof vi.fn>; navigate: ReturnType<typeof vi.fn> }[]> => []),
+      openWindow: vi.fn(async (_url: string) => null),
+    },
     skipWaiting,
     addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler),
   };
@@ -141,10 +145,53 @@ describe("production service worker cache boundaries", () => {
     await value.lifecycle("install");
     await value.lifecycle("activate");
     await value.request("/connected").response;
-    expect([...value.handlers.keys()]).toEqual(["install", "activate", "fetch"]);
+    expect([...value.handlers.keys()]).toEqual(["install", "activate", "fetch", "notificationclick"]);
     expect(value.skipWaiting).not.toHaveBeenCalled();
     expect(value.claim).not.toHaveBeenCalled();
     expect(value.self.clients.matchAll).not.toHaveBeenCalled();
     expect(value.reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("notification click", () => {
+  async function click(value: ReturnType<typeof worker>, data = {}) {
+    const waitUntil = vi.fn();
+    const close = vi.fn();
+    value.handlers.get("notificationclick")!({ notification: { close, data }, waitUntil });
+    await Promise.all(waitUntil.mock.calls.map(([promise]) => promise));
+    expect(close).toHaveBeenCalledTimes(1);
+    return waitUntil;
+  }
+
+  it("focuses a connected same-origin window without navigating or reloading any session", async () => {
+    const value = worker();
+    const home = { url: origin + "/", focus: vi.fn(), navigate: vi.fn() };
+    const connected = { url: origin + "/connected", focus: vi.fn(), navigate: vi.fn() };
+    value.self.clients.matchAll.mockResolvedValue([home, connected]);
+    await click(value);
+    expect(connected.focus).toHaveBeenCalledTimes(1);
+    expect(home.focus).not.toHaveBeenCalled();
+    expect(connected.navigate).not.toHaveBeenCalled();
+    expect(home.navigate).not.toHaveBeenCalled();
+    expect(value.self.clients.openWindow).not.toHaveBeenCalled();
+  });
+
+  it("focuses an existing waiting app without navigating it", async () => {
+    const value = worker();
+    const waiting = { url: origin + "/waiting", focus: vi.fn(), navigate: vi.fn() };
+    value.self.clients.matchAll.mockResolvedValue([waiting]);
+    await click(value);
+    expect(waiting.focus).toHaveBeenCalledTimes(1);
+    expect(waiting.navigate).not.toHaveBeenCalled();
+    expect(value.self.clients.openWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens only Home when no app client exists and ignores supplied destinations", async () => {
+    const value = worker();
+    const foreign = { url: "https://elsewhere.example/connected", focus: vi.fn(), navigate: vi.fn() };
+    value.self.clients.matchAll.mockResolvedValue([foreign]);
+    await click(value, { url: "https://elsewhere.example/j/secret#private" });
+    expect(foreign.focus).not.toHaveBeenCalled();
+    expect(value.self.clients.openWindow).toHaveBeenCalledWith("/");
   });
 });

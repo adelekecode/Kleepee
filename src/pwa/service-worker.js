@@ -34,3 +34,16 @@ self.addEventListener("fetch", (event) => {
     await cache.match(url.pathname) || fetch(request),
   ));
 });
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const appWindows = windows.filter((client) => new URL(client.url).origin === self.location.origin);
+    const existing = appWindows.find((client) => new URL(client.url).pathname === "/connected") || appWindows[0];
+    // Preserve existing in-memory sessions; never navigate a live client or use
+    // a join link or notification-supplied URL as a navigation destination.
+    if (existing) return existing.focus();
+    return self.clients.openWindow("/");
+  })());
+});

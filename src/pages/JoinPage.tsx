@@ -17,6 +17,7 @@ export function JoinPage() {
   const { device, joinSession, state, reset, error, retryAttempt } =
     useSessionContext();
   const [joinError, setJoinError] = useState<SessionError | null>(null);
+  const [joinAttempt, setJoinAttempt] = useState(0);
   const joinSessionRef = useRef(joinSession);
   joinSessionRef.current = joinSession;
   const sessionSecret = useLocation().hash.slice(1);
@@ -35,7 +36,7 @@ export function JoinPage() {
     void joinSessionRef
       .current(sessionId, sessionSecret, device.deviceName, device.deviceId)
       .then((result) => {
-        if (active && !result.ok) {
+        if (active && !result.ok && result.error.code !== "operation_cancelled") {
           setJoinError(result.error);
         }
       });
@@ -48,6 +49,7 @@ export function JoinPage() {
     invalidLink,
     sessionId,
     sessionSecret,
+    joinAttempt,
   ]);
 
   useEffect(() => {
@@ -72,21 +74,22 @@ export function JoinPage() {
     );
   }
 
+  if (state === "CONNECTED") {
+    return <Navigate to="/connected" replace />;
+  }
+
   if (joinError || error) {
     const activeError = joinError || error;
     return (
       <JoinErrorScreen
         message={activeError?.message || "Could not connect to this session."}
+        onRetry={activeError?.code === "connection_failed" ? () => setJoinAttempt((attempt) => attempt + 1) : undefined}
         onReset={() => {
           reset();
           navigate("/", { replace: true });
         }}
       />
     );
-  }
-
-  if (state === "CONNECTED") {
-    return <Navigate to="/connected" replace />;
   }
 
   const isReconnecting = state === "DISCONNECTED" && retryAttempt > 0;
@@ -115,9 +118,11 @@ export function JoinPage() {
 function JoinErrorScreen({
   message,
   onReset,
+  onRetry,
 }: {
   message: string;
   onReset: () => void;
+  onRetry?: () => void;
 }) {
   return (
     <main className="fade-in flex flex-1 flex-col justify-center py-8">
@@ -128,7 +133,8 @@ function JoinErrorScreen({
         <h1 className="text-2xl font-semibold text-kleepee-espresso">
           {message}
         </h1>
-        <button className="btn-primary mt-2" type="button" onClick={onReset}>
+        {onRetry && <button className="btn-primary mt-2" type="button" onClick={onRetry}>Try again</button>}
+        <button className={onRetry ? "btn-secondary" : "btn-primary mt-2"} type="button" onClick={onReset}>
           Start new session
         </button>
       </section>

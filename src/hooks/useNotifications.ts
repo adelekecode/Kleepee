@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   requestNotificationPermission,
   getNotificationPermission,
@@ -43,10 +43,23 @@ export function useNotifications(): UseNotificationsResult {
   const [soundEnabled, setSoundEnabledState] = useState(isSoundEnabled);
   const [toast, setToast] = useState<InAppToast | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    const refreshPermission = () => setPermission(getNotificationPermission());
+    window.addEventListener("focus", refreshPermission);
+    document.addEventListener("visibilitychange", refreshPermission);
+    return () => {
+      mountedRef.current = false;
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      window.removeEventListener("focus", refreshPermission);
+      document.removeEventListener("visibilitychange", refreshPermission);
+    };
+  }, []);
 
   const requestPermission = useCallback(async () => {
     const result = await requestNotificationPermission();
-    setPermission(result);
+    if (mountedRef.current) setPermission(result);
   }, []);
 
   const showToast = useCallback((senderName: string, preview: string) => {
@@ -69,14 +82,12 @@ export function useNotifications(): UseNotificationsResult {
     (item: TextItem, currentDeviceId: string) => {
       if (item.senderId === currentDeviceId) return;
 
-      // Try system notification first (desktop / PWA)
-      const shown =
-        systemNotificationsSupported() && Notification.permission === "granted";
-      showMessageNotification(item.senderName, item.content);
-
-      // Fall back to in-app toast when tab is visible or system notif unavailable
-      if (!shown || document.visibilityState === "visible") {
+      if (document.visibilityState === "visible") {
         showToast(item.senderName, item.content);
+      } else {
+        void showMessageNotification(item.senderName, item.content).then((shown) => {
+          if (!shown && mountedRef.current) showToast(item.senderName, item.content);
+        });
       }
 
       if (isSoundEnabled()) {

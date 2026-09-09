@@ -1,60 +1,77 @@
-// ---------------------------------------------------------------------------
-// System notification support detection
-// ---------------------------------------------------------------------------
-
-/**
- * Returns true only when the browser actually supports and can show system
- * notifications. Mobile Chrome (non-PWA) does not support the Notification
- * constructor in a regular tab, so we probe for it explicitly.
- */
+/** Capability checks must never construct a notification or request permission. */
 export function systemNotificationsSupported(): boolean {
-  if (typeof window === "undefined") return false;
-  if (!("Notification" in window)) return false;
+  if (typeof window === "undefined" || window.isSecureContext === false) return false;
+  if (typeof Notification === "undefined" || typeof Notification.requestPermission !== "function") return false;
+  if (isIOS() && !isStandalone()) return false;
+  return !isMobile() || typeof navigator.serviceWorker?.getRegistration === "function";
+}
 
-  // Mobile Chrome reports Notification in window but silently fails unless
-  // the site is installed as a PWA. We detect this by checking for the
-  // serviceWorker + PushManager combo that the push-based path requires.
-  // If neither is available we treat system notifications as unsupported.
+function isIOS(): boolean {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function isMobile(): boolean {
+  return isIOS() || /Android|Mobile/.test(navigator.userAgent);
+}
+
+function isStandalone(): boolean {
+  return window.matchMedia?.("(display-mode: standalone)").matches === true ||
+    (navigator as Navigator & { standalone?: boolean }).standalone === true;
+}
+
+function pageIsVisible(): boolean {
+  return document.visibilityState === "visible";
+}
+
+/** Invoke directly from a click: do not await service worker readiness first. */
+export async function requestNotificationPermission(): Promise<NotificationPermission> {
+  if (!systemNotificationsSupported()) return "denied";
+  if (Notification.permission !== "default") return Notification.permission;
   try {
-    // A quick sanity-check: can we actually construct one (won't fire without
-    // permission, but won't throw on supported platforms either)?
-    // On Android Chrome in a tab this throws "Illegal constructor".
-    new Notification(""); // will be blocked by permission anyway
-    return true;
+    return await Notification.requestPermission();
   } catch {
-    return false;
+    return Notification.permission;
   }
 }
 
-export async function requestNotificationPermission(): Promise<NotificationPermission> {
-  if (!systemNotificationsSupported()) return "denied";
-  if (Notification.permission === "granted") return "granted";
-  if (Notification.permission === "denied") return "denied";
-  return Notification.requestPermission();
-}
-
 export function getNotificationPermission(): NotificationPermission {
-  if (!systemNotificationsSupported()) return "denied";
-  return Notification.permission;
+  return systemNotificationsSupported() ? Notification.permission : "denied";
 }
 
-/** Show a system notification only when the tab is not focused. */
-export function showMessageNotification(
+/** Best effort for messages actually received while the page is running. No push delivery. */
+export async function showMessageNotification(
   senderName: string,
   preview: string,
-): void {
-  if (!systemNotificationsSupported()) return;
-  if (Notification.permission !== "granted") return;
-  if (document.visibilityState === "visible") return;
-
+): Promise<boolean> {
+  if (!systemNotificationsSupported() || Notification.permission !== "granted") return false;
+  if (pageIsVisible()) return false;
+  const title = `Message from ${senderName}`;
+  const options: NotificationOptions = {
+    body: preview.length > 100 ? preview.slice(0, 100) + "…" : preview,
+    icon: "/icon-192.png",
+    tag: "kleepee-message",
+    // No session identifiers, join secrets, or message contents in notification data.
+    data: { url: "/connected" },
+    silent: !isSoundEnabled(),
+  };
   try {
-    new Notification(`Message from ${senderName}`, {
-      body: preview.length > 100 ? preview.slice(0, 100) + "…" : preview,
-      icon: "/favicon-32x32.png",
-      tag: "kleepee-message",
-    } as NotificationOptions);
+    // ready can wait forever in development when no worker is registered.
+    const registration = await navigator.serviceWorker?.getRegistration();
+    if (pageIsVisible()) return false;
+    if (registration?.active && typeof registration.showNotification === "function") {
+      await registration.showNotification(title, options);
+      return true;
+    }
+    if (isMobile()) return false;
+    const notification = new Notification(title, options);
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+    return true;
   } catch {
-    /* silently ignore on platforms where construction fails */
+    return false;
   }
 }
 
@@ -94,22 +111,22 @@ export function unlockAudio(): void {
   const ctx = getOrCreateContext();
   if (!ctx) return;
 
-  const doUnlock = () => {
+  try {
+    // Start the buffer inside the gesture, rather than after awaiting resume.
     playSilentBuffer(ctx);
-  };
-
-  if (ctx.state === "suspended") {
-    void ctx.resume().then(doUnlock);
-  } else {
-    doUnlock();
+    if (ctx.state !== "running") void ctx.resume().catch(() => {});
+  } catch {
+    // Audio restrictions must not interrupt the click handler or sharing.
   }
 }
 
 export function playMessageSound(): void {
-  const ctx = getOrCreateContext();
-  if (!ctx) return;
+  // Background playback/resume is controlled by the OS. Never queue a chime
+  // behind a suspended resume promise, which could sound long after arrival.
+  const ctx = audioCtx;
+  if (!ctx || ctx.state !== "running" || document.visibilityState !== "visible") return;
 
-  const play = () => {
+  try {
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     osc.type = "sine";
@@ -125,14 +142,8 @@ export function playMessageSound(): void {
     gain.connect(ctx.destination);
     osc.start(now);
     osc.stop(now + 0.36);
-  };
-
-  if (ctx.state === "suspended") {
-    // Context suspended — try to resume. On iOS this only works if called
-    // from within a gesture; otherwise it's a no-op and sound is skipped.
-    void ctx.resume().then(play);
-  } else {
-    play();
+  } catch {
+    // Sound is optional; browser audio failures do not affect message delivery.
   }
 }
 
