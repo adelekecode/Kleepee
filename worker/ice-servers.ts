@@ -21,43 +21,63 @@ const CREDENTIAL_TTL_SECONDS = 3600;
 // Provider metadata and blocked port 53 must never reach RTCPeerConnection.
 function usableUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;
-  return /^stun:stun\.cloudflare\.com:3478$/.test(value)
-    || /^turn:turn\.cloudflare\.com:3478\?transport=(udp|tcp)$/.test(value)
-    || /^turn:turn\.cloudflare\.com:80\?transport=tcp$/.test(value)
-    || /^turns:turn\.cloudflare\.com:(5349|443)\?transport=tcp$/.test(value);
+  return (
+    /^stun:stun\.cloudflare\.com:3478$/.test(value) ||
+    /^turn:turn\.cloudflare\.com:3478\?transport=(udp|tcp)$/.test(value) ||
+    /^turn:turn\.cloudflare\.com:80\?transport=tcp$/.test(value) ||
+    /^turns:turn\.cloudflare\.com:(5349|443)\?transport=tcp$/.test(value)
+  );
 }
 
 function sanitizeIceServers(value: unknown): IceServer[] {
-  if (!value || typeof value !== "object" || !("iceServers" in value)
-    || !Array.isArray(value.iceServers)) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("iceServers" in value) ||
+    !Array.isArray(value.iceServers)
+  ) {
     throw new Error("Invalid relay configuration");
   }
 
   const servers: IceServer[] = [];
   for (const entry of value.iceServers) {
     if (!entry || typeof entry !== "object") continue;
-    const candidates: unknown[] = Array.isArray(entry.urls) ? entry.urls : [entry.urls];
+    const candidates: unknown[] = Array.isArray(entry.urls)
+      ? entry.urls
+      : [entry.urls];
     const urls = [...new Set(candidates.filter(usableUrl))];
     if (urls.length === 0) continue;
 
     if (urls.some((url) => url.startsWith("turn"))) {
-      if (typeof entry.username !== "string" || !entry.username.trim()
-        || typeof entry.credential !== "string" || !entry.credential.trim()) {
+      if (
+        typeof entry.username !== "string" ||
+        !entry.username.trim() ||
+        typeof entry.credential !== "string" ||
+        !entry.credential.trim()
+      ) {
         throw new Error("Invalid relay configuration");
       }
-      servers.push({ urls, username: entry.username, credential: entry.credential });
+      servers.push({
+        urls,
+        username: entry.username,
+        credential: entry.credential,
+      });
     } else {
       servers.push({ urls });
     }
   }
 
-  if (!servers.some((server) => server.urls.some((url) => url.startsWith("turn")))) {
+  if (
+    !servers.some((server) => server.urls.some((url) => url.startsWith("turn")))
+  ) {
     throw new Error("Invalid relay configuration");
   }
   return servers;
 }
 
-export async function getIceServerConfiguration(env: TurnEnv): Promise<IceServerConfiguration> {
+export async function getIceServerConfiguration(
+  env: TurnEnv,
+): Promise<IceServerConfiguration> {
   const keyId = env.TURN_KEY_ID?.trim();
   const apiToken = env.TURN_KEY_API_TOKEN?.trim();
   if (!keyId && !apiToken) {

@@ -1,8 +1,9 @@
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Composer, type ComposerResult } from "../components/Composer";
 import { RecentSessions } from "../components/RecentSessions";
 import { useSessionContext } from "../context/SessionContext";
+import { resolveJoinCode } from "../lib/joinCode";
 import { parseJoinURL } from "../lib/qr";
 
 export function HomePage() {
@@ -13,6 +14,11 @@ export function HomePage() {
   const [joinOpen, setJoinOpen] = useState(false);
   const [joinLink, setJoinLink] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
+
+  const [joiningCode, setJoiningCode] = useState(false);
+  const [verification, setVerification] = useState<string | null>(null);
+  const joinController = useRef<AbortController | null>(null);
+  useEffect(() => () => joinController.current?.abort(), []);
 
   async function handleShare(
     text: string,
@@ -35,21 +41,29 @@ export function HomePage() {
     return { textSent: true, ...queued };
   }
 
-  function handleJoin(event: FormEvent<HTMLFormElement>) {
+  async function handleJoin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (joinController.current) return;
+    const controller = new AbortController();
+    joinController.current = controller;
+    setJoiningCode(true); setJoinError(null); setVerification(null);
     try {
-      const parsed = parseJoinURL(joinLink.trim());
-      if (!parsed.sessionId || !parsed.sessionSecret)
-        throw new Error("Missing session details");
-      setJoinError(null);
+      const value = joinLink.trim();
+      const parsed = /^https?:\/\//i.test(value)
+        ? parseJoinURL(value)
+        : await resolveJoinCode(value, device.deviceName, controller.signal, setVerification);
+      if (!parsed.sessionId || !/^[A-Za-z0-9]+$/.test(parsed.sessionId) || !parsed.sessionSecret || !/^[A-Za-z0-9_-]+$/.test(parsed.sessionSecret))
+        throw new Error("Paste the complete join link, including everything after #.");
+      if (controller.signal.aborted) return;
       reset();
-      navigate(
-        `/j/${encodeURIComponent(parsed.sessionId)}#${parsed.sessionSecret}`,
-      );
-    } catch {
-      setJoinError(
-        "Paste the complete Kleepee join link, including everything after #.",
-      );
+      navigate(`/j/${encodeURIComponent(parsed.sessionId)}#${parsed.sessionSecret}`);
+    } catch (failure) {
+      if (!controller.signal.aborted) setJoinError(failure instanceof Error ? failure.message : "Could not join. Try again.");
+    } finally {
+      if (joinController.current === controller) {
+        joinController.current = null;
+        setJoiningCode(false); setVerification(null);
+      }
     }
   }
 
@@ -68,6 +82,7 @@ export function HomePage() {
       <Composer
         actionLabel="Create sharing link"
         pending={isPending}
+        disabled={joiningCode}
         error={error?.message}
         onSubmit={handleShare}
       />
@@ -78,7 +93,7 @@ export function HomePage() {
 
       <div className="flex items-center gap-3">
         <span className="h-px flex-1 bg-kleepee-border" />
-        <span className="text-xs text-kleepee-muted">Already have a link?</span>
+        <span className="text-xs text-kleepee-muted">Have a code or link?</span>
         <span className="h-px flex-1 bg-kleepee-border" />
       </div>
       <button
@@ -86,7 +101,7 @@ export function HomePage() {
         type="button"
         aria-expanded={joinOpen}
         aria-controls={joinId}
-        disabled={isPending}
+        disabled={isPending || joiningCode}
         onClick={() => {
           setJoinOpen((open) => !open);
           setJoinError(null);
@@ -100,12 +115,12 @@ export function HomePage() {
 
       {joinOpen && (
         <section className="panel" id={joinId}>
-          <form className="flex flex-col gap-3" onSubmit={handleJoin}>
+          <form className="flex flex-col gap-3" onSubmit={(event) => void handleJoin(event)}>
             <label
               className="text-sm font-medium text-kleepee-espresso"
               htmlFor={`${joinId}-input`}
             >
-              Session link
+              Session code or link
             </label>
             <input
               id={`${joinId}-input`}
@@ -113,9 +128,10 @@ export function HomePage() {
               value={joinLink}
               autoFocus
               autoComplete="off"
-              autoCapitalize="none"
+              autoCapitalize="characters"
+              disabled={joiningCode}
               spellCheck={false}
-              placeholder="Paste the full Kleepee link…"
+              placeholder="Enter 4 characters or paste a join link…"
               aria-invalid={Boolean(joinError)}
               aria-describedby={joinError ? `${joinId}-error` : undefined}
               onChange={(event) => {
@@ -123,6 +139,15 @@ export function HomePage() {
                 setJoinError(null);
               }}
             />
+            {verification && <div className="rounded-[18px] bg-kleepee-panel p-4 text-center" role="status">
+              <p className="font-mono text-2xl tracking-widest">{verification}</p>
+              <p className="mt-2 text-sm text-kleepee-muted">Compare this number on the sending device, then approve the request there.</p>
+            </div>}
+            {joiningCode && <button className="btn-secondary self-start" type="button" onClick={() => {
+              joinController.current?.abort();
+              joinController.current = null;
+              setJoiningCode(false); setVerification(null);
+            }}>Cancel request</button>}
             {joinError && (
               <p
                 id={`${joinId}-error`}
@@ -135,9 +160,9 @@ export function HomePage() {
             <button
               className="btn-primary self-end"
               type="submit"
-              disabled={!joinLink.trim() || isPending}
+              disabled={!joinLink.trim() || isPending || joiningCode}
             >
-              Join
+              {joiningCode ? "Waiting for approval…" : "Join"}
             </button>
           </form>
         </section>

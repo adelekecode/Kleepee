@@ -24,8 +24,8 @@ interface Env extends TurnEnv {
 
 const CORS_HEADERS: HeadersInit = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Upgrade, Connection",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Upgrade, Connection, Authorization",
 };
 
 function corsJson(body: unknown, status = 200, noStore = false): Response {
@@ -74,6 +74,22 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
   }
 
   // POST /sessions — create a new session
+  const codeMatch = pathname.match(/^\/join-codes\/([A-Z2-9]{4})$/);
+  if (codeMatch && (method === "GET" || method === "PUT" || method === "POST")) {
+    try {
+      const stub = env.SESSION_DO.get(env.SESSION_DO.idFromName(`join-code:${codeMatch[1]}`));
+      const target = new URL(request.url);
+      target.pathname = "/join-code";
+      const response = await stub.fetch(new Request(target, request));
+      const headers = new Headers(response.headers);
+      for (const [name, value] of Object.entries(CORS_HEADERS)) headers.set(name, value);
+      headers.set("Cache-Control", "no-store");
+      return new Response(response.body, { status: response.status, headers });
+    } catch {
+      return corsJson({ error: "Join code unavailable" }, 503, true);
+    }
+  }
+
   if (method === "POST" && pathname === "/sessions") {
     const sessionId = generateSessionId();
     const doId = env.SESSION_DO.idFromName(sessionId);
@@ -84,7 +100,9 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 
   // Route patterns for /sessions/:sessionId and /sessions/:sessionId/ws
   const sessionWsMatch = pathname.match(/^\/sessions\/([A-Z0-9]+)\/ws$/i);
-  const sessionIceMatch = pathname.match(/^\/sessions\/([A-Z0-9]+)\/ice-servers$/i);
+  const sessionIceMatch = pathname.match(
+    /^\/sessions\/([A-Z0-9]+)\/ice-servers$/i,
+  );
   const sessionMatch = pathname.match(/^\/sessions\/([A-Z0-9]+)$/i);
 
   if (method === "GET" && sessionIceMatch) {
@@ -114,10 +132,15 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
   return corsText("Not Found", 404);
 }
 
-async function sessionIceServers(request: Request, env: Env, sessionId: string): Promise<Response> {
+async function sessionIceServers(
+  request: Request,
+  env: Env,
+  sessionId: string,
+): Promise<Response> {
   try {
     const deviceId = new URL(request.url).searchParams.get("deviceId");
-    if (!deviceId) return corsJson({ error: "Device identity required" }, 400, true);
+    if (!deviceId)
+      return corsJson({ error: "Device identity required" }, 400, true);
 
     // Fetch state without forwarding Upgrade headers: this route must never
     // consume a peer slot or mint credentials for an empty/expired session.
@@ -128,16 +151,23 @@ async function sessionIceServers(request: Request, env: Env, sessionId: string):
     if (stateResponse.status === 410) {
       return corsJson({ error: "Session expired" }, 410, true);
     }
-    if (!stateResponse.ok) return corsJson({ error: "Session unavailable" }, 503, true);
-    const state = await stateResponse.json() as {
+    if (!stateResponse.ok)
+      return corsJson({ error: "Session unavailable" }, 503, true);
+    const state = (await stateResponse.json()) as {
       sessionState: string;
       deviceCount: number;
       canJoin: boolean;
     };
-    if (state.sessionState === "EXPIRED") return corsJson({ error: "Session expired" }, 410, true);
-    if (state.deviceCount === 0) return corsJson({ error: "Session not found" }, 404, true);
-    if (state.canJoin === false) return corsJson({ error: "Session is full" }, 409, true);
-    if (typeof state.deviceCount !== "number" || typeof state.canJoin !== "boolean") {
+    if (state.sessionState === "EXPIRED")
+      return corsJson({ error: "Session expired" }, 410, true);
+    if (state.deviceCount === 0)
+      return corsJson({ error: "Session not found" }, 404, true);
+    if (state.canJoin === false)
+      return corsJson({ error: "Session is full" }, 409, true);
+    if (
+      typeof state.deviceCount !== "number" ||
+      typeof state.canJoin !== "boolean"
+    ) {
       return corsJson({ error: "Session unavailable" }, 503, true);
     }
 
@@ -165,7 +195,11 @@ function normalizePath(pathname: string): string {
 // Forward a request to the appropriate Durable Object
 // ---------------------------------------------------------------------------
 
-async function forwardToDO(request: Request, env: Env, sessionId: string): Promise<Response> {
+async function forwardToDO(
+  request: Request,
+  env: Env,
+  sessionId: string,
+): Promise<Response> {
   const doId = env.SESSION_DO.idFromName(sessionId);
   const stub = env.SESSION_DO.get(doId);
 

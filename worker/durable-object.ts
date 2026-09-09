@@ -1,3 +1,5 @@
+import { handleJoinCode, expireJoinCode } from "./join-code";
+
 interface Env {
   SESSION_DO: DurableObjectNamespace;
 }
@@ -33,6 +35,7 @@ export class SessionDurableObject implements DurableObject {
   ) {}
 
   async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/join-code") return handleJoinCode(request, this.ctx);
     await this.loadSessionState();
     this.restorePeers();
 
@@ -51,7 +54,8 @@ export class SessionDurableObject implements DurableObject {
       return this.json({
         sessionState: this.sessionState,
         deviceCount: this.peers.size,
-        canJoin: this.peers.size < 2 || this.findPeerByDeviceId(deviceId) !== null,
+        canJoin:
+          this.peers.size < 2 || this.findPeerByDeviceId(deviceId) !== null,
       });
     }
 
@@ -61,7 +65,8 @@ export class SessionDurableObject implements DurableObject {
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     this.restorePeers();
 
-    const wireMessage = typeof message === "string" ? message : new TextDecoder().decode(message);
+    const wireMessage =
+      typeof message === "string" ? message : new TextDecoder().decode(message);
     let parsed: { type?: string } & Record<string, unknown>;
 
     try {
@@ -95,7 +100,11 @@ export class SessionDurableObject implements DurableObject {
 
     // A replacement socket for this device must not look like a departure.
     const replacementPeer = this.findPeerByDeviceId(attachment.deviceId);
-    if (replacementPeer && replacementPeer.attachment.peerId !== attachment.peerId) return;
+    if (
+      replacementPeer &&
+      replacementPeer.attachment.peerId !== attachment.peerId
+    )
+      return;
 
     this.peers.delete(attachment.peerId);
 
@@ -111,6 +120,7 @@ export class SessionDurableObject implements DurableObject {
   }
 
   async alarm(): Promise<void> {
+    if (await expireJoinCode(this.ctx)) return;
     await this.loadSessionState();
     this.restorePeers();
 
@@ -169,7 +179,12 @@ export class SessionDurableObject implements DurableObject {
 
     for (const [peerId, peer] of this.peers) {
       if (peerId !== attachment.peerId) {
-        server.send(JSON.stringify({ type: "peer.join", deviceName: peer.attachment.deviceName }));
+        server.send(
+          JSON.stringify({
+            type: "peer.join",
+            deviceName: peer.attachment.deviceName,
+          }),
+        );
       }
     }
 
@@ -211,7 +226,8 @@ export class SessionDurableObject implements DurableObject {
   }
 
   private async loadSessionState(): Promise<void> {
-    const storedState = await this.ctx.storage.get<DurableSessionState>(SESSION_STATE_KEY);
+    const storedState =
+      await this.ctx.storage.get<DurableSessionState>(SESSION_STATE_KEY);
     this.sessionState = storedState ?? this.sessionState;
   }
 
@@ -234,7 +250,10 @@ export class SessionDurableObject implements DurableObject {
   }
 
   private getAttachment(ws: WebSocket): PeerAttachment | null {
-    const attachment = ws.deserializeAttachment() as PeerAttachment | string | null;
+    const attachment = ws.deserializeAttachment() as
+      | PeerAttachment
+      | string
+      | null;
 
     if (!attachment) {
       return null;

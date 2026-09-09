@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
+import { JoinCode } from "../components/JoinCode";
 import { QRCode } from "../components/QRCode";
 import { StatusBar } from "../components/StatusBar";
 import { buildJoinURL } from "../lib/qr";
@@ -91,6 +92,7 @@ export function WaitingPage() {
         )}
 
         <QRCode url={joinUrl} />
+        <JoinCode key={sessionId} sessionId={sessionId} sessionSecret={sessionSecret} />
 
         {initialText && (
           <div className="rounded-[18px] border border-kleepee-border bg-kleepee-panel p-4 text-left">
